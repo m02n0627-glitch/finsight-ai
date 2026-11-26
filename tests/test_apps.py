@@ -479,11 +479,11 @@ def test_app_v2_simulator_failure_does_not_break_other_tabs(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 상태 라벨(양호·보통·부담) · 업종 평균 대비(높음/낮음 · 우위/열위)
+# 판정 기준 — 절대 컷 없음(동종업계 평균 대비 우위/열위) · 최소 경보선만 은은한 라벨
 # ---------------------------------------------------------------------------
 
 def healthy_company():
-    """모든 주요 지표가 '양호' 구간에 들어오는 기업 — 라벨이 양호로 찍히는지 본다."""
+    """경보선에 하나도 걸리지 않는 기업 — 라벨이 붙지 않고 평균 대비만 남는지 본다."""
     company = _company("삼성전자", "00126380", "005930", impaired=False)
     company["years"][2024]["accounts"].update({
         "revenue": {"amount": 1.0e12}, "op_income": {"amount": 1.5e11},
@@ -532,8 +532,8 @@ def healthy_analysis():
             "ccc_gap": None, "industry_peers": healthy_peer_block()}
 
 
-def test_app_v2_marks_good_metrics_with_muted_status_tag(monkeypatch):
-    """주요 지표 카드 — 큰 숫자 옆에 '양호' 라벨, 아래에 업종 평균 대비 한 줄이 작게 붙는다."""
+def test_app_v2_uses_peer_comparison_only_not_absolute_cut_labels(monkeypatch):
+    """경보선에 안 걸리는 기업 — '양호/보통/부담' 라벨 없이 평균 대비 문구만 작게."""
     analysis = healthy_analysis()
     monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
     monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
@@ -544,12 +544,16 @@ def test_app_v2_marks_good_metrics_with_muted_status_tag(monkeypatch):
 
     markdown = _markdown(at)
     assert "주요 지표" in _texts(at)
-    assert '<span class="fs-tag good"' in markdown          # 양호 라벨
-    assert markdown.count('<span class="fs-tag good"') >= 5  # 5개 지표 모두 양호
-    assert "양호" in markdown
+    # 임의 절대 컷 라벨(양호/보통/부담)은 화면 어디에도 라벨로 쓰이지 않는다
+    # (설명란에는 '절대 컷을 두지 않는다'는 문장으로만 남는다)
+    assert ">양호<" not in markdown
+    assert ">보통<" not in markdown
+    assert ">부담<" not in markdown
+    assert '<span class="fs-tag' not in markdown      # 경보선에 안 걸리면 라벨 자체가 없다
     # 평균 대비 문구는 회색 보조 클래스로만 나온다(숫자와 같은 크기로 새지 않는다)
     assert "평균 8.0% 대비 높음" in markdown
-    assert '<div class="fs-peer-cmp">평균 8.0% 대비 높음' in markdown
+    assert '<div class="fs-peer-cmp">평균 8.0% 대비 높음 · <span class="fs-peer-verdict good">우위</span>' in markdown
+    assert markdown.count('<div class="fs-peer-cmp">') >= 5   # 5개 지표 모두 평균 대비가 있다
 
 
 def test_app_v2_average_comparison_respects_metric_direction(monkeypatch):
@@ -564,24 +568,51 @@ def test_app_v2_average_comparison_respects_metric_direction(monkeypatch):
     markdown = _markdown(at)
 
     # 높을수록 좋은 지표: 평균보다 높음 = 우위
-    assert '평균 8.0% 대비 높음 <span class="fs-peer-verdict good">우위</span>' in markdown
+    assert '평균 8.0% 대비 높음 · <span class="fs-peer-verdict good">우위</span>' in markdown
     # 낮을수록 좋은 지표: 평균보다 낮음 = 우위 (여기서 방향을 틀리면 열위로 찍힌다)
-    assert '평균 140.0% 대비 낮음 <span class="fs-peer-verdict good">우위</span>' in markdown
-    assert '평균 90일 대비 낮음 <span class="fs-peer-verdict good">우위</span>' in markdown
+    assert '평균 140.0% 대비 낮음 · <span class="fs-peer-verdict good">우위</span>' in markdown
+    assert '평균 90일 대비 낮음 · <span class="fs-peer-verdict good">우위</span>' in markdown
     assert 'fs-peer-verdict bad' not in markdown                # 이 기업은 모든 지표가 우위
 
 
-def test_app_v2_marks_burden_and_keeps_capital_impairment(monkeypatch, patched_engine):
-    """적자·과다부채 기업 — '부담' 라벨, 자본잠식은 '자본잠식 · 위험' 그대로."""
+def test_app_v2_shows_minimum_alerts_on_loss_and_impaired_capital(monkeypatch, patched_engine):
+    """영업적자·유동비율 100% 미만·자본잠식 — 이 네 가지 객관적 경보선만 라벨이 붙는다."""
     monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
     at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
 
     assert not at.exception
     markdown = _markdown(at)
     assert '<span class="fs-tag bad"' in markdown
-    assert "부담" in markdown
     assert "자본잠식 · 위험" in markdown                       # ROE·부채비율 카드
-    assert '평균 13.0% 대비 낮음 <span class="fs-peer-verdict bad">열위</span>' in markdown
+    assert "적자 · 주의" in markdown                           # 영업이익률 카드(영업적자)
+    assert "100% 미만 · 주의" in markdown                      # 유동비율 카드(80%)
+    assert ">부담<" not in markdown                             # 임의 절대 컷 라벨은 사라졌다
+    assert ">양호<" not in markdown
+    assert '평균 13.0% 대비 낮음 · <span class="fs-peer-verdict bad">열위</span>' in markdown
+
+
+def test_app_v2_samsung_ccc_127_days_is_not_labelled_burden(monkeypatch):
+    """삼성전자처럼 CCC 127일인 기업 — 예전 90일 컷으로 '부담'을 붙이지 않는다."""
+    company = healthy_company()
+    company["years"][2024]["ccc"] = {"dso": 90.0, "dio": 60.0, "dpo": 23.0, "ccc": 127.0,
+                                     "inputs": {}}
+    block = healthy_peer_block()                 # 피어도 CCC 127일인 회사로 맞춘다(평균 90일)
+    block["target_values"]["ccc"] = 127.0
+    block["rows"] = fs.compare_peers(block["target_values"], block["peers"])
+    analysis = {"companies": [company], "years": [2023, 2024], "dupont_gap": None,
+                "ccc_gap": None, "industry_peers": block}
+    monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    monkeypatch.setenv("DART_API_KEY", "l" * 40)
+
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+    assert not at.exception
+    markdown = _markdown(at)
+
+    assert '<div class="val">127일</div>' in markdown          # CCC 카드는 그대로 보인다
+    assert '<span class="fs-tag' not in markdown               # 127일만으로 경보 라벨을 달지 않는다
+    # 대신 평균 90일보다 길다는 사실과 열위만 회색 보조 문구로 남긴다
+    assert '평균 90일 대비 높음 · <span class="fs-peer-verdict bad">열위</span>' in markdown
 
 
 def test_app_v2_helper_text_is_smaller_than_main_numbers(monkeypatch, patched_engine):

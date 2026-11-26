@@ -138,36 +138,67 @@ FEATURES = [
     ("공시 위험 · DART 원문", "최근 1년 공시 키워드와 사업보고서 원문 링크"),
 ]
 
-# ── 주요 지표의 '방향'과 상태 라벨 기준 ─────────────────────────────────────
-# 수치가 좋은 신호인지 부담인지 한눈에 보이도록 지표마다 기준선을 둔다.
+# ── 주요 지표의 '방향' ─────────────────────────────────────────────────────
+# 업종마다 적정 마진·부채·현금주기가 달라 절대 컷('양호 · 보통 · 부담')은 두지 않는다.
+# 판정은 두 갈래뿐이다.
+#   (1) 주 근거 — 같은 업종 피어의 실측 평균 대비 위치(높음/낮음 · 우위/열위).
+#       '우위/열위'는 지표 방향(higher)을 반영한 판정이다.
+#   (2) 예외 — 업종과 무관하게 재무적 위험 신호로 이견이 없는 '최소 경보선'(ALERT_RULES).
 #   higher=True  → 값이 클수록 좋다 (영업이익률·ROE·유동비율)
 #   higher=False → 값이 작을수록 좋다 (부채비율·CCC)
-#   good : 이 값 이상(작을수록 좋은 지표는 이 값 이하)이면 '양호'
-#   mid  : 이 값 이상(이하)이면 '보통', 그 밖은 '부담'
 METRIC_RULES = {
     "op_margin": {
         "label": "영업이익률", "unit": "%", "digits": 1, "higher": True,
-        "good": 10.0, "mid": 0.0, "basis": "10% 이상 양호 · 0% 미만 적자(부담)",
     },
     "roe": {
         "label": "ROE", "unit": "%", "digits": 1, "higher": True,
-        "good": 10.0, "mid": 0.0, "basis": "10% 이상 양호 · 0% 미만 부담",
     },
     "debt_ratio": {
         "label": "부채비율", "unit": "%", "digits": 1, "higher": False,
-        "good": 100.0, "mid": 200.0, "basis": "100% 이하 양호 · 200% 초과 부담",
     },
     "current_ratio": {
         "label": "유동비율", "unit": "%", "digits": 1, "higher": True,
-        "good": 150.0, "mid": 100.0, "basis": "150% 이상 양호 · 100% 미만 부담",
     },
     "ccc": {
         "label": "CCC", "unit": "일", "digits": 0, "higher": False,
-        "good": 30.0, "mid": 90.0, "basis": "30일 이하 양호 · 90일 초과 부담",
     },
 }
 KPI_METRIC_ORDER = ("op_margin", "roe", "debt_ratio", "current_ratio", "ccc")
-STATUS_WORD = {"good": "양호", "mid": "보통", "bad": "부담"}
+
+# ── 최소 재무 경보선 ───────────────────────────────────────────────────────
+# 업종과 무관하게 위험 신호라는 데 이견이 없는 네 가지만 muted 라벨로 표시한다.
+# 1배 미만·100% 미만 같은 선은 회계·신용평가에서 통용되는 '지급능력' 기준이고,
+# '마진 10%가 양호' 같은 업종 의존적 컷과는 성격이 다르다.
+ALERT_RULES = {
+    "op_margin": {
+        "text": "적자 · 주의", "bad": lambda v: v < 0,
+        "basis": "영업이익률 0% 미만 — 본업(영업)에서 손실",
+    },
+    "roe": {
+        "text": "적자 · 주의", "bad": lambda v: v < 0,
+        "basis": "ROE 0% 미만 — 당기순손실",
+    },
+    "current_ratio": {
+        "text": "100% 미만 · 주의", "bad": lambda v: v < 100.0,
+        "basis": "유동비율 100% 미만 — 유동자산이 유동부채보다 적어 단기 지급여력이 부족",
+    },
+    "interest_coverage": {
+        "text": "1배 미만 · 주의", "bad": lambda v: v < 1.0,
+        "basis": "이자보상배율 1배 미만 — 영업이익으로 이자비용을 다 덮지 못함",
+    },
+}
+# 자본잠식은 지표 값이 아니라 재무상태 자체의 신호라 따로 둔다(부채비율·ROE 카드에 붙는다).
+IMPAIRED_TAG = {
+    "text": "자본잠식 · 위험",
+    "basis": "자본총계 0 이하 — 부채비율·ROE가 의미를 잃는 상태",
+}
+
+
+def alert_rule_text():
+    """설명란에 쓸 최소 경보선 목록 (규칙 정의와 문구가 갈라지지 않게 여기서 만든다)."""
+    items = ["%s(→ %s)" % (rule["basis"].split(" — ")[0], rule["text"])
+             for rule in ALERT_RULES.values()]
+    return " · ".join(["자본잠식(자본총계 0 이하 → %s)" % IMPAIRED_TAG["text"]] + items)
 
 
 # ---------------------------------------------------------------------------
@@ -224,27 +255,22 @@ def state_badge(state):
     return "%s %s" % (light, label)
 
 
+def interest_coverage(company, year):
+    """이자보상배율 = 영업이익 ÷ 이자비용. 영업이익이 없거나 이자비용이 0이면 None."""
+    op_income = account_amount(company, year, "op_income")
+    interest = account_amount(company, year, "interest_expense")
+    if op_income is None or not interest:
+        return None
+    return op_income / interest
+
+
 def metric_value(company, year, key):
-    """주요 지표 값 하나 (영업이익률·ROE·부채비율·유동비율은 비율, CCC는 일)."""
+    """주요 지표 값 하나 (영업이익률·ROE·부채비율·유동비율은 비율, CCC는 일, 이자보상배율은 배)."""
     if key == "ccc":
         return ((company["years"].get(year) or {}).get("ccc") or {}).get("ccc")
+    if key == "interest_coverage":
+        return interest_coverage(company, year)
     return ratio_of(company, year, key)
-
-
-def metric_status(key, value):
-    """지표 값 → (tone, 라벨). 방향(높을수록/낮을수록 좋음)을 지표별로 구분한다.
-
-    tone 은 CSS 클래스 이름이자 의미다 — good(양호) / mid(보통) / bad(부담).
-    값을 알 수 없으면 (None, "").
-    """
-    rule = METRIC_RULES.get(key)
-    if not rule or value is None:
-        return None, ""
-    if rule["higher"]:
-        tone = "good" if value >= rule["good"] else ("mid" if value >= rule["mid"] else "bad")
-    else:                                   # 부채비율·CCC — 낮을수록 좋다
-        tone = "good" if value <= rule["good"] else ("mid" if value <= rule["mid"] else "bad")
-    return tone, STATUS_WORD[tone]
 
 
 def status_tag(tone, text, basis=""):
@@ -255,11 +281,29 @@ def status_tag(tone, text, basis=""):
     return '<span class="fs-tag %s"%s>%s</span>' % (tone, tip, html_lib.escape(text))
 
 
-def metric_status_tag(key, value):
-    """지표 값에 맞는 상태 라벨 HTML (기준선을 툴팁으로 함께)."""
-    tone, word = metric_status(key, value)
-    rule = METRIC_RULES.get(key) or {}
-    return status_tag(tone, word, rule.get("basis", ""))
+def alert_tag(key, company, year):
+    """최소 경보선에 걸릴 때만 붙는 muted 라벨. 걸리지 않으면 빈 문자열.
+
+    절대 컷 판정은 여기서만 한다 — 지표가 경보선을 넘었다는 사실만 말하고,
+    그 밖의 좋고 나쁨은 동종업계 평균 대비 위치(peer_position)가 맡는다.
+    """
+    rule = ALERT_RULES.get(key)
+    if not rule:
+        return ""
+    value = metric_value(company, year, key)
+    if value is None or not rule["bad"](value):
+        return ""
+    return status_tag("bad", rule["text"], rule["basis"])
+
+
+def impaired_tag(company, year):
+    """자본잠식(자본총계 0 이하)일 때만 '자본잠식 · 위험' 라벨."""
+    try:
+        impaired = bool(fs.capital_impaired_info(company, year)["impaired"])
+    except Exception:                      # 엔진 함수가 없는 옛 배포본
+        impaired = False
+    return status_tag("bad", IMPAIRED_TAG["text"], IMPAIRED_TAG["basis"]) if impaired else ""
+
 
 
 def peer_rows(analysis):
@@ -300,7 +344,7 @@ def peer_cmp_html(position, cls="fs-peer-cmp"):
     """'평균 8.1% 대비 높음 · 우위' — 11px 이하 회색 보조 문구."""
     if not position:
         return ""
-    return ('<div class="%s">%s <span class="fs-peer-verdict %s">%s</span></div>'
+    return ('<div class="%s">%s · <span class="fs-peer-verdict %s">%s</span></div>'
             % (cls, html_lib.escape(position["text"]), position["tone"],
                html_lib.escape(position["verdict"])))
 
@@ -848,8 +892,13 @@ ROE 15%가 마진으로 번 것인지 빚으로 키운 것인지가 여기서 �
 **동종업계 비교** — 같은 업종코드 회사들의 같은 지표와 나란히 놓는 것입니다. 업종마다 마진·부채 수준이 달라
 절대값보다 *상대 위치*가 중요합니다. 피어가 2~3곳뿐이라 한 회사가 평균을 끌고 갈 수 있어 **평균과 중앙값**을 함께 봅니다.
 
-**양호 · 보통 · 부담** — 숫자 옆 작은 라벨은 좋은 신호인지 부담인지입니다. 영업이익률·ROE·유동비율은 **높을수록**,
-부채비율·CCC는 **낮을수록** 좋습니다. 업종 평균 대비는 높음/낮음 대신 **우위 · 열위**로 따로 적습니다.
+**판정 기준** — 숫자 옆에 '양호 · 보통 · 부담' 같은 절대 컷을 두지 않습니다. 업종마다 적정 마진·부채·현금주기가 달라서입니다.
+판단의 주 근거는 **같은 업종 피어의 실측 평균 대비 위치**입니다. 평균보다 높음/낮음은 사실이고,
+우위/열위는 지표 방향을 반영한 판정입니다(부채비율·CCC는 낮을수록 우위).
+
+**최소 경보선** — 업종과 무관하게 위험 신호라는 데 이견이 없는 네 가지만 은은한 회색 라벨로 남겼습니다.
+**자본잠식**(자본총계 0 이하) → `자본잠식 · 위험` · **영업적자·당기순손실**(영업이익률 0% 미만 또는 ROE 0% 미만) → `적자 · 주의` ·
+**유동비율 100% 미만** → `100% 미만 · 주의` · **이자보상배율 1배 미만** → `1배 미만 · 주의`.
 """
 
 # ── 탭 ④ 시나리오 용어 (짧게) ───────────────────────────────────────────────
@@ -1163,7 +1212,7 @@ def render_summary(analysis):
                          "전년 대비 %s" % (num(revenue_growth, 1, "%") if revenue_growth is not None else "-")),
             metric_block("영업이익률", pct(op_margin),
                          "전년 대비 %s" % (num(margin_diff, 1, "%p") if margin_diff is not None else "-"),
-                         tag=metric_status_tag("op_margin", op_margin), cmp_html=margin_cmp),
+                         tag=alert_tag("op_margin", company, latest), cmp_html=margin_cmp),
             metric_block("최근 1년 공시 위험", d_value, disclosure_note),
         ])
 
@@ -1718,18 +1767,19 @@ def chart_fpa_scenarios(result):
 # ---------------------------------------------------------------------------
 
 def metric_overview_card(key, company, latest, position=None, impaired=False):
-    """주요 지표 카드 한 장 — 큰 숫자 / 작은 상태 라벨 / (있으면) 회색 평균 대비 한 줄."""
+    """주요 지표 카드 한 장 — 큰 숫자 / (경보선에 걸릴 때만) 작은 라벨 / 회색 평균 대비 한 줄."""
     rule = METRIC_RULES[key]
     value = metric_value(company, latest, key)
-    head = "%s %s" % (html_lib.escape(rule["label"]), metric_status_tag(key, value))
 
     # 자본잠식이면 부채비율·ROE는 음수 자본으로 왜곡되어 엔진이 계산하지 않는다.
     if impaired and key in ("roe", "debt_ratio"):
         return ('<div class="fs-kpi"><div class="lbl">%s %s</div>'
                 '<div class="val">-</div>'
                 '<div class="cmp">자본이 0 이하라 계산하지 않습니다</div></div>'
-                % (html_lib.escape(rule["label"]), status_tag("bad", "자본잠식 · 위험")))
+                % (html_lib.escape(rule["label"]), impaired_tag(company, latest)))
 
+    tag = alert_tag(key, company, latest)
+    head = "%s %s" % (html_lib.escape(rule["label"]), tag) if tag else html_lib.escape(rule["label"])
     shown = fs.format_peer_value(value, rule["unit"], rule["digits"])
     if value is None:                        # 계산 자체가 안 되는 지표(금융업 CCC 등)
         return ('<div class="fs-kpi"><div class="lbl">%s</div>'
@@ -1742,7 +1792,7 @@ def metric_overview_card(key, company, latest, position=None, impaired=False):
 
 
 def render_metric_overview(analysis):
-    """주요 5개 지표를 한 줄로 — 숫자보다 상태 라벨·평균 대비가 뒤로 묻히게(11px 이하)."""
+    """주요 5개 지표를 한 줄로 — 숫자보다 경보 라벨·평균 대비가 뒤로 묻히게(11px 이하)."""
     companies, years = analysis["companies"], analysis["years"]
     if len(companies) > 1:                       # 비교 모드는 기업 카드가 이미 나란히 있다
         return
@@ -1754,9 +1804,10 @@ def render_metric_overview(analysis):
     except Exception:
         impaired = False
 
-    note = "%d년 결산 기준 · 숫자 옆 라벨이 좋은 신호(양호)/부담 신호입니다" % latest
+    note = "%d년 결산 기준" % latest
     if positions:
         note += " · 회색 글씨는 같은 업종 평균 대비 위치"
+    note += " · 숫자 옆 라벨은 최소 경보선(적자·유동비율 100% 미만·이자보상배율 1배 미만·자본잠식)에만 붙습니다"
     section_title("주요 지표", note + ".")
 
     columns = st.columns(len(KPI_METRIC_ORDER))
@@ -1793,14 +1844,17 @@ def render_tab1(analysis):
             "| 영업이익률 | 영업이익 ÷ 매출액 × 100 | 매출 100원 중 본업에서 남긴 이익 |\n"
             "| 순이익률 | 당기순이익 ÷ 매출액 × 100 | 이자·세금까지 반영한 최종 이익률 |\n"
             "| ROE | 당기순이익 ÷ 기말 자본총계 × 100 | 주주 자본으로 번 수익률 |\n"
-            "| 부채비율 | 부채총계 ÷ 자본총계 × 100 | 100% 이하면 안정, 200% 초과는 주의 |\n"
-            "| 유동비율 | 유동자산 ÷ 유동부채 × 100 | 100% 미만이면 단기 지급 부담 |\n"
+            "| 부채비율 | 부채총계 ÷ 자본총계 × 100 | 업종 평균과 비교해 읽습니다 (절대 기준 없음) |\n"
+            "| 유동비율 | 유동자산 ÷ 유동부채 × 100 | 100% 미만이면 단기 지급여력 부족(경보선) |\n"
+            "| 이자보상배율 | 영업이익 ÷ 이자비용 | 1배 미만이면 영업이익으로 이자를 못 덮는 상태(경보선) |\n"
             "| 매출액·영업이익 증가율 | (당기 − 전기) ÷ \\|전기\\| × 100 | 전기가 적자면 부호가 뒤집히지 않게 절댓값으로 나눔 |\n"
         )
         st.caption("ROE는 기말 자본 기준입니다. (기초+기말)/2 평균자본 기준과는 값이 조금 다를 수 있습니다. 자본잠식(자본총계 0 이하)인 해는 부채비율·ROE를 계산하지 않습니다.")
-        st.caption("상태 라벨 기준 — 영업이익률·ROE 10% 이상 양호(0% 미만 부담) · 부채비율 100% 이하 양호(200% 초과 부담) "
-                   "· 유동비율 150% 이상 양호(100% 미만 부담) · CCC 30일 이하 양호(90일 초과 부담). "
-                   "업종마다 적정 수준이 달라 참고용입니다.")
+        st.caption("판정 기준 — 업종마다 적정 마진·부채·현금주기가 달라 '양호 · 보통 · 부담' 같은 절대 컷은 두지 않습니다. "
+                   "판단의 주 근거는 같은 업종 피어의 실측 평균 대비 위치입니다: 평균보다 높음/낮음(사실)과 "
+                   "우위/열위(지표 방향을 반영한 판정 — 부채비율·CCC는 낮을수록 우위).")
+        st.caption("최소 경보선 — 업종과 무관하게 위험 신호로 보는 네 가지만 은은한 회색 라벨로 붙입니다: "
+                   + alert_rule_text() + ". (이자보상배율 1배 미만은 ③ 리스크 상세에서 '위험'으로 표시됩니다.)")
 
 
 # ---------------------------------------------------------------------------
