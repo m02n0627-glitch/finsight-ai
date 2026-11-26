@@ -361,14 +361,19 @@ ACCOUNT_SPECS = [
      "names": ("매출액", "수익(매출액)", "영업수익", "매출")},
     {"key": "op_income", "label": "영업이익",  "sj_div": ("IS", "CIS"),
      "names": ("영업이익", "영업이익(손실)", "영업손익")},
+    # '연결당기순이익'은 연결 포괄손익계산서 계정명이다(예: 현대자동차 2022).
+    # 이 이름이 후보에 없어 순이익을 못 찾는 해가 있었다.
     {"key": "net_income", "label": "당기순이익", "sj_div": ("IS", "CIS"),
-     "names": ("당기순이익", "당기순이익(손실)", "분기순이익", "반기순이익", "분기순이익(손실)")},
+     "names": ("당기순이익", "당기순이익(손실)", "연결당기순이익", "연결당기순이익(손실)",
+               "당기순손익", "연결당기순손익", "분기순이익", "반기순이익", "분기순이익(손실)")},
     # --- 재무상태표 ---
-    {"key": "assets",        "label": "자산총계", "sj_div": ("BS",), "names": ("자산총계",)},
-    {"key": "current_assets", "label": "유동자산", "sj_div": ("BS",), "names": ("유동자산",)},
-    {"key": "liabilities",   "label": "부채총계", "sj_div": ("BS",), "names": ("부채총계",)},
-    {"key": "current_liab",  "label": "유동부채", "sj_div": ("BS",), "names": ("유동부채",)},
-    {"key": "equity",        "label": "자본총계", "sj_div": ("BS",), "names": ("자본총계",)},
+    # 회사마다 '자본 총계'(공백)·'자본합계'처럼 적는 경우가 있어 별칭을 함께 둔다.
+    # 띄어쓰기 차이는 normalize_name()이 흡수한다.
+    {"key": "assets",        "label": "자산총계", "sj_div": ("BS",), "names": ("자산총계", "자산합계")},
+    {"key": "current_assets", "label": "유동자산", "sj_div": ("BS",), "names": ("유동자산", "유동자산합계")},
+    {"key": "liabilities",   "label": "부채총계", "sj_div": ("BS",), "names": ("부채총계", "부채합계")},
+    {"key": "current_liab",  "label": "유동부채", "sj_div": ("BS",), "names": ("유동부채", "유동부채합계")},
+    {"key": "equity",        "label": "자본총계", "sj_div": ("BS",), "names": ("자본총계", "자본합계")},
 ]
 
 
@@ -404,65 +409,128 @@ EXTRA_SPECS = [
 
 
 def normalize_name(name):
-    """계정명 비교용: 띄어쓰기를 없애 '영업활동 현금흐름'과 '영업활동현금흐름'을 같게 본다."""
-    return (name or "").replace(" ", "")
+    """
+    계정명 비교용 정규화: 모든 공백(일반·전각·줄바꿈)을 없앤다.
+
+    DART 계정명은 같은 회사 안에서도 '자본 총계' / '자본총계',
+    '영업활동 현금흐름' / '영업활동현금흐름'처럼 띄어쓰기가 섞여 온다.
+    공백만 지우면 같은 계정으로 볼 수 있다.
+    """
+    return re.sub(r"\s+", "", str(name or ""))
 
 
-def fetch_extra_accounts(api_key, corp_code, year):
+def pick_account(spec, unique_rows):
+    """
+    계정 정의(spec)에 맞는 첫 행을 찾는다.
+
+      unique_rows : {(sj_div, 정규화한 계정명): row}  ← 한 재무제표 안의 행
+      1순위 IFRS 표준 태그(account_id) → 2순위 계정명 별칭(공백 무시)
+
+    주요계정(fnlttSinglAcnt)·전체 재무제표(fnlttSinglAcntAll) 두 곳에서 같이 쓴다.
+    """
+    for account_id in spec.get("ids") or ():      # 1순위: IFRS 표준 태그
+        for (sj_div, _name), row in unique_rows.items():
+            if sj_div in spec["sj_div"] and row.get("account_id") == account_id:
+                return row
+    for name in spec["names"]:                    # 2순위: 계정명(띄어쓰기 무시)
+        target = normalize_name(name)
+        for (sj_div, account_nm), row in unique_rows.items():
+            if sj_div in spec["sj_div"] and account_nm == target:
+                return row
+    return None
+
+
+def unique_rows_of(rows):
+    """같은 계정이 여러 번 오는 응답에서 (재무제표, 정규화 계정명) 첫 행만 남긴다."""
+    unique = {}
+    for row in rows:
+        key = (row.get("sj_div"), normalize_name(row.get("account_nm")))
+        unique.setdefault(key, row)
+    return unique
+
+
+def fetch_full_statement_rows(api_key, corp_code, year, fs_div=None):
+    """
+    전체 재무제표(fnlttSinglAcntAll.json)를 '실제로 조회된 재무제표' 기준으로 받는다.
+
+    ★ 연결재무제표가 없는 회사(별도만 공시)는 fs_div='CFS' 요청이 빈 응답이 된다.
+      예전 구현은 CFS로 고정해 두어 그런 회사의 현금흐름·이자비용이 전 연도 N/A였다.
+      이제는 (1) 실제 주요계정에서 쓴 fs_div → (2) CFS → (3) OFS 순으로 시도한다.
+
+    반환값: (used_div, rows) — 못 받으면 (None, [])
+    """
+    prefs = []
+    for div in (fs_div, "CFS", "OFS"):
+        if div and div not in prefs:
+            prefs.append(div)
+
+    for div in prefs:
+        params = {
+            "crtfc_key": api_key,
+            "corp_code": corp_code,
+            "bsns_year": str(year),
+            "reprt_code": REPORT_ANNUAL,
+            "fs_div": div,
+        }
+        try:
+            result = call_json("fnlttSinglAcntAll.json", params)
+        except (DartError, RuntimeError):
+            continue
+        if result.get("status") != "000":
+            continue
+        rows = result.get("list") or []
+        if not rows:
+            continue
+        # 이 엔드포인트는 fs_div 필드를 주지 않는 경우가 많다.
+        # 있으면 요청한 재무제표 행만 쓰고, 없으면 응답 전체가 그 재무제표다.
+        if any("fs_div" in row for row in rows):
+            matched = [row for row in rows if row.get("fs_div") == div]
+            if not matched:
+                continue
+            return div, matched
+        return div, rows
+    return None, []
+
+
+def fetch_extra_accounts(api_key, corp_code, year, fs_div=None, known_accounts=None):
     """
     fnlttSinglAcntAll.json(전체 재무제표)에서 리스크 진단용 계정을 추가로 뽑는다.
 
     현금흐름표(CF)·이익잉여금·금융비용은 주요계정(fnlttSinglAcnt)에는 없다.
     이 호출이 실패해도 기본 분석은 그대로 진행되도록 빈 dict를 돌려준다(→ 리스크 항목은 N/A).
+
+    fs_div        : 주요계정에서 실제로 쓴 재무제표(CFS/OFS). 넘기면 그 재무제표를 먼저 조회한다.
+    known_accounts: 주요계정 분석 결과. 넘기면 주요계정 API가 빠뜨린 핵심 계정
+                    (예: 한화·금호석유화학 2023년 '자본총계')을 같은 응답으로 보완한다.
+                    이미 있는 값은 절대 덮어쓰지 않는다.
     """
-    params = {
-        "crtfc_key": api_key,
-        "corp_code": corp_code,
-        "bsns_year": str(year),
-        "reprt_code": REPORT_ANNUAL,
-        "fs_div": "CFS",
-    }
-    try:
-        result = call_json("fnlttSinglAcntAll.json", params)
-    except (DartError, RuntimeError):
-        return {}
-    if result.get("status") != "000":
+    _used_div, rows = fetch_full_statement_rows(api_key, corp_code, year, fs_div=fs_div)
+    if not rows:                                   # 연결·별도 모두 응답이 없으면 보강하지 않는다
         return {}
 
-    rows = result.get("list") or []
-    # 이 엔드포인트는 fs_div 필드를 주지 않는 경우가 많다. 있으면 연결만 사용.
-    if any("fs_div" in row for row in rows):
-        cfs_rows = [row for row in rows if row.get("fs_div") == "CFS"]
-        rows = cfs_rows or rows
+    unique = unique_rows_of(rows)
+    found_accounts = {}
 
-    unique = {}
-    for row in rows:
-        unique.setdefault((row.get("sj_div"), row.get("account_nm")), row)
-
-    extras = {}
     for spec in EXTRA_SPECS:
-        found = None
-        for account_id in spec["ids"]:            # 1순위: IFRS 표준 태그
-            for (sj_div, _name), row in unique.items():
-                if sj_div in spec["sj_div"] and row.get("account_id") == account_id:
-                    found = row
-                    break
-            if found:
-                break
-        if found is None:                          # 2순위: 계정명(띄어쓰기 무시)
-            for name in spec["names"]:
-                for (sj_div, account_nm), row in unique.items():
-                    if sj_div in spec["sj_div"] and normalize_name(account_nm) == normalize_name(name):
-                        found = row
-                        break
-                if found:
-                    break
+        found = pick_account(spec, unique)
         if found:
-            extras[spec["key"]] = {
+            found_accounts[spec["key"]] = {
                 "amount": parse_amount(found.get("thstrm_amount")),
                 "account_nm": found.get("account_nm"),
             }
-    return extras
+
+    if known_accounts is not None:
+        for spec in ACCOUNT_SPECS:
+            if spec["key"] in known_accounts:      # 주요계정에서 이미 받은 값은 그대로 둔다
+                continue
+            found = pick_account(spec, unique)
+            if found:
+                found_accounts[spec["key"]] = {
+                    "amount": parse_amount(found.get("thstrm_amount")),
+                    "prev_amount": parse_amount(found.get("frmtrm_amount")),
+                    "account_nm": found.get("account_nm"),
+                }
+    return found_accounts
 
 
 def parse_amount(text):
@@ -516,27 +584,20 @@ def fetch_statement(api_key, corp_code, year, fs_div_pref=("CFS", "OFS")):
     if not used_rows:  # fs_div 값이 예상과 다른 경우 → 전체 사용
         used_div, used_rows = rows[0].get("fs_div", "CFS"), rows
 
-    # --- (2) 같은 계정이 두 번 오는 경우가 있어 (sj_div, account_nm) 기준으로 첫 행만 사용 ---
-    unique = {}
-    for row in used_rows:
-        unique.setdefault((row.get("sj_div"), row.get("account_nm")), row)
+    # --- (2) 같은 계정이 두 번 오는 경우가 있어 (sj_div, 계정명) 기준으로 첫 행만 사용 ---
+    unique = unique_rows_of(used_rows)
 
     # --- (3) 우리가 원하는 계정을 이름 후보 순서대로 찾아 담는다 ---
+    #     계정명 비교는 공백을 무시한다('자본 총계' = '자본총계').
     accounts = {}
     for spec in ACCOUNT_SPECS:
-        for name in spec["names"]:
-            found = None
-            for (sj_div, account_nm), row in unique.items():
-                if sj_div in spec["sj_div"] and account_nm == name:
-                    found = row
-                    break
-            if found:
-                accounts[spec["key"]] = {
-                    "amount": parse_amount(found.get("thstrm_amount")),
-                    "prev_amount": parse_amount(found.get("frmtrm_amount")),
-                    "account_nm": name,
-                }
-                break
+        found = pick_account(spec, unique)
+        if found:
+            accounts[spec["key"]] = {
+                "amount": parse_amount(found.get("thstrm_amount")),
+                "prev_amount": parse_amount(found.get("frmtrm_amount")),
+                "account_nm": found.get("account_nm"),
+            }
 
     fs_nm = used_rows[0].get("fs_nm", "연결재무제표" if used_div == "CFS" else "재무제표")
     return used_div, fs_nm, used_rows[0].get("rcept_no", ""), accounts
@@ -593,11 +654,19 @@ def compute_ratios(years_data, years_sorted):
         prev_revenue = prev_entry["accounts"].get("revenue", {}).get("amount") if prev_entry else None
         prev_op = prev_entry["accounts"].get("op_income", {}).get("amount") if prev_entry else None
 
+        # --- 자본잠식(자본총계 ≤ 0) -------------------------------------------------
+        # 자본이 음수면 부채비율·ROE·재무레버리지가 부호가 뒤집혀
+        #   · 부채비율 -1,154%  → 마치 부채가 적은 것처럼 보이고
+        #   · ROE +%         → 적자인데도 이익률이 좋아 보이는
+        # 왜곡이 생긴다. 이 해는 비율을 계산하지 않고 '자본잠식'으로 표시한다.
+        equity_impaired = equity is not None and equity <= 0
+        entry["capital_impaired"] = bool(equity_impaired)
+
         entry["ratios"] = {
             "op_margin": safe_ratio(op_income, revenue),          # 영업이익률 (%)
             "net_margin": safe_ratio(net_income, revenue),        # 순이익률 (%)
-            "roe": safe_ratio(net_income, equity),                # ROE (%) — 기말 자본 기준
-            "debt_ratio": safe_ratio(liabilities, equity),        # 부채비율 (%)
+            "roe": None if equity_impaired else safe_ratio(net_income, equity),  # ROE (%) — 기말 자본
+            "debt_ratio": None if equity_impaired else safe_ratio(liabilities, equity),  # 부채비율 (%)
             "current_ratio": safe_ratio(current_assets, current_liab),  # 유동비율 (%)
             "revenue_growth": growth_rate(revenue, prev_revenue),  # 매출액 증가율 (%)
             "op_growth": growth_rate(op_income, prev_op),          # 영업이익 증가율 (%)
@@ -613,7 +682,8 @@ def compute_ratios(years_data, years_sorted):
         #   공시된 한 시점 자산과 바로 대응되며, HTML·콘솔·README에 이 기준을 명시한다.
         net_margin = entry["ratios"]["net_margin"]                    # %
         asset_turnover = safe_ratio(revenue, assets, scale=1.0)      # 회 (매출액 ÷ 기말 자산총계)
-        equity_multiplier = safe_ratio(assets, equity, scale=1.0)    # 배 (자산총계 ÷ 자본총계)
+        equity_multiplier = (None if equity_impaired               # 배 (자산총계 ÷ 자본총계)
+                             else safe_ratio(assets, equity, scale=1.0))
         dupont_roe = None
         if None not in (net_margin, asset_turnover, equity_multiplier):
             # (%/100) × 회 × 배 × 100 = %
@@ -1228,7 +1298,7 @@ RISK_META = {
 # 항목별 판정 기준 (README·HTML에 그대로 표기되는 문구)
 RISK_CRITERIA = {
     "current_ratio": "150% 이상 안전 · 100~150% 주의 · 100% 미만 위험",
-    "debt_ratio": "100% 이하 안전 · 100~200% 주의 · 200% 초과 위험",
+    "debt_ratio": "100% 이하 안전 · 100~200% 주의 · 200% 초과 위험 · 자본잠식(자본총계 0 이하)은 위험",
     "interest_coverage": "3배 이상 안전 · 1~3배 주의 · 1배 미만 위험",
     "cash_quality": "영업현금흐름과 순이익 동반 흑자 안전 · 순이익 흑자이나 현금흐름 적자 위험 · 동반 적자 위험",
     "solvency": "연속 영업적자 없음 + Z'' 2.6 이상 안전 · 1.1~2.6 주의 · 1.1 미만 위험",
@@ -1281,6 +1351,35 @@ def altman_z_double_prime(accounts):
     return 6.56 * x1 + 3.26 * x2 + 6.72 * x3 + 1.05 * x4
 
 
+def short_won(value):
+    """금액을 화면용으로 짧게: 1兆 이상은 '조원', 그 아래는 '억원'."""
+    if value is None:
+        return "-"
+    if abs(value) >= 1e12:
+        return "%.1f조원" % (value / 1e12)
+    return "%s억원" % format(round(value / 1e8), ",")
+
+
+def capital_impaired_info(company, year):
+    """
+    자본잠식(자본총계 ≤ 0) 여부를 한 곳에서 판정한다(엔진·화면 공용).
+
+    자본이 0이나 음수면 부채비율·ROE는 의미가 없거나 부호가 뒤집힌다.
+    그런 해는 숫자 대신 '자본잠식' 상태를 보여 준다.
+
+    반환값: {"impaired": bool, "amount": 자본총계 또는 None, "text": "자본잠식 · 자본총계 -4,402억원"}
+    """
+    entry = (company.get("years") or {}).get(year) or {}
+    amount = ((entry.get("accounts") or {}).get("equity") or {}).get("amount")
+    if amount is None or amount > 0:
+        return {"impaired": False, "amount": amount, "text": ""}
+    return {
+        "impaired": True,
+        "amount": amount,
+        "text": "자본잠식 · 자본총계 %s" % short_won(amount),
+    }
+
+
 def evaluate_risk(company, years):
     """
     한 회사의 5대 리스크 항목을 판정하고 100점 만점 종합 점수를 계산한다.
@@ -1294,6 +1393,7 @@ def evaluate_risk(company, years):
     entry = company["years"][latest]
     accounts = entry["accounts"]
     ratios = entry["ratios"]
+    impaired = capital_impaired_info(company, latest)
     items = []
 
     def add(key, label, value_text, state, note=""):
@@ -1318,7 +1418,12 @@ def evaluate_risk(company, years):
 
     # --- (2) 부채비율 ---
     debt_ratio = ratios.get("debt_ratio")
-    if debt_ratio is None:
+    if impaired["impaired"]:
+        # 자본잠식은 '계산 불가(N/A)'가 아니라 명백한 위험 신호다.
+        # N/A로 두면 분모에서 빠져 위험 기업의 점수가 오히려 올라간다.
+        add("debt_ratio", "부채비율", "자본잠식", "danger",
+            "%s — 부채비율·ROE는 음수 자본으로 왜곡되어 계산하지 않습니다" % impaired["text"])
+    elif debt_ratio is None:
         add("debt_ratio", "부채비율", "계산 불가", "na", "자본총계·부채총계 미공시")
     else:
         state = "safe" if debt_ratio <= 100 else ("caution" if debt_ratio <= 200 else "danger")
@@ -1408,6 +1513,8 @@ def evaluate_risk(company, years):
         "caution": "일부 지표를 지켜봐야 합니다",
         "danger": "재무 리스크가 높습니다",
     }[grade]
+    if impaired["impaired"]:
+        headline = "자본잠식 상태입니다"       # 점수와 무관하게 상태를 먼저 알린다
     comment = "%s %s · %d점 — %s" % (RISK_META[grade]["light"], headline, score, " / ".join(phrases))
 
     return {
@@ -1418,6 +1525,8 @@ def evaluate_risk(company, years):
         "z_score": z_score,
         "op_loss_streak": streak,
         "available_count": sum(1 for i in items if i["state"] != "na"),
+        "capital_impaired": impaired["impaired"],
+        "capital_impaired_text": impaired["text"],
     }
 
 
@@ -1434,10 +1543,15 @@ def evaluate_risk(company, years):
 # (공시명에 포함된 문자열, 화면 표시 이름, 심각도)
 #   severe  = 즉시 확인이 필요한 사건성 공시
 #   caution = 자본·구조 변경처럼 맥락을 봐야 하는 공시
+#
+# 여러 키워드가 같은 공시에 걸리면 표시 이름이 같아도 한 번만 보여 준다(라벨 중복 제거).
+# 띄어쓰기 차이('채권은행등의 관리절차 개시신청' / '채권은행등의관리절차개시신청')는 무시한다.
 DISCLOSURE_RISK_KEYWORDS = [
+    # --- 사건성 공시(severe) ---
     ("횡령", "횡령", "severe"),
     ("배임", "배임", "severe"),
     ("의견거절", "감사의견 거절", "severe"),
+    ("의견부적정", "감사의견 거절", "severe"),
     ("감사의견", "감사의견 비적정", "severe"),
     ("한정", "감사의견 한정", "severe"),
     ("상장폐지", "상장폐지", "severe"),
@@ -1446,8 +1560,27 @@ DISCLOSURE_RISK_KEYWORDS = [
     ("부도", "부도", "severe"),
     ("회생", "회생절차", "severe"),
     ("소송", "소송", "severe"),
+    # --- 부실화·워크아웃 · 자본잠식(severe) ---
+    # 태영건설 2023-12-28 실제 공시명: '채권은행등의관리절차개시신청'
+    # (예전 키워드로는 이 사건을 하나도 못 잡았다 — 재현율 0)
+    ("채권은행", "채권은행 관리절차(워크아웃) 신청", "severe"),
+    ("관리절차", "채권은행 관리절차(워크아웃) 신청", "severe"),
+    ("기업구조개선", "기업구조개선(워크아웃) 신청", "severe"),
+    ("워크아웃", "기업구조개선(워크아웃) 신청", "severe"),
+    ("자율협약", "채권단 자율협약", "severe"),
+    ("채무재조정", "채무재조정", "severe"),
+    ("기한의이익", "기한의이익 상실(채무불이행)", "severe"),
+    ("채무불이행", "기한의이익 상실(채무불이행)", "severe"),
+    ("파산", "파산 신청", "severe"),
+    ("상장적격성", "상장적격성 실질심사", "severe"),
+    ("실질심사", "상장적격성 실질심사", "severe"),
+    ("개선기간", "개선기간 부여", "severe"),
+    ("영업정지", "영업정지", "severe"),
+    ("자본잠식", "자본잠식", "severe"),
+    # --- 맥락을 봐야 하는 공시(caution) ---
     ("유상증자", "유상증자", "caution"),
     ("감자", "감자", "caution"),
+    ("최대주주변경", "최대주주 변경", "caution"),
 ]
 
 DISCLOSURE_SCAN_DAYS = 365      # 최근 1년
@@ -1555,10 +1688,12 @@ def fetch_disclosure_risks(api_key, corp_code, days=DISCLOSURE_SCAN_DAYS, max_pa
     matches, seen = [], set()
     for row in rows:
         report_nm = row.get("report_nm") or ""
+        normalized = normalize_name(report_nm)     # 공시명 띄어쓰기 무시
         labels, severity = [], "caution"
         for keyword, label, level in DISCLOSURE_RISK_KEYWORDS:
-            if keyword in report_nm:
-                labels.append(label)
+            if normalize_name(keyword) in normalized:
+                if label not in labels:            # 같은 공시에 걸린 같은 표시 이름은 한 번만
+                    labels.append(label)
                 if level == "severe":
                     severity = "severe"
         if not labels:
@@ -1689,6 +1824,10 @@ def print_console_report(analysis):
             print(line)
         if any(c["years"][y].get("op_growth_base_negative") for y in years for c in [company]):
             print("  * 전년 영업이익이 적자였던 해의 증가율은 절대값 기준으로 계산한 참고치입니다.")
+        for year in years:
+            impairment = capital_impaired_info(company, year)
+            if impairment["impaired"]:
+                print("  * %d년 %s — 부채비율·ROE는 계산하지 않습니다." % (year, impairment["text"]))
 
         # ---- DuPont 3단계 분해 ----
         print()
@@ -2819,8 +2958,12 @@ def build_html(analysis):
         parts.append('<div class="name"><span class="dot" style="background:%s"></span>%s · ROE</div>'
                      % (color, html_escape(company["name"])))
         parts.append('<div class="value">%s</div>' % pct(ratios.get("roe")))
-        parts.append('<div class="note">부채비율 %s · 유동비율 %s</div>'
-                     % (pct(ratios.get("debt_ratio")), pct(ratios.get("current_ratio"))))
+        impairment = capital_impaired_info(company, latest)
+        if impairment["impaired"]:
+            parts.append('<div class="note">%s</div>' % html_escape(impairment["text"]))
+        else:
+            parts.append('<div class="note">부채비율 %s · 유동비율 %s</div>'
+                         % (pct(ratios.get("debt_ratio")), pct(ratios.get("current_ratio"))))
         parts.append("</div>")
     parts.append("</div>")
     parts.append("</section>")
@@ -3021,8 +3164,11 @@ def collect_company(api_key, corp, years, verbose=True):
         company["years"][year]["statement_links"] = links
         company["statement_links"][year] = links
         # 리스크 진단용 계정(이자비용·영업활동현금흐름·이익잉여금)을 보강한다.
+        # 주요계정에서 실제로 쓴 재무제표(fs_div)를 그대로 따라가고(연결이 없으면 별도),
+        # 주요계정 API가 빠뜨린 핵심 계정(예: 자본총계)도 같은 응답에서 채운다.
         # 전체 재무제표 API가 막혀도 본 분석은 계속되도록 결과가 비어도 넘어간다.
-        extras = fetch_extra_accounts(api_key, corp["corp_code"], year)
+        extras = fetch_extra_accounts(api_key, corp["corp_code"], year,
+                                      fs_div=fs_div, known_accounts=accounts)
         accounts.update(extras)
         # 최근 연도 기준으로 어떤 재무제표를 썼는지 기록
         company["fs_div"] = fs_div

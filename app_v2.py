@@ -637,7 +637,8 @@ DISCLAIMER_TMPL = (
     '업종별 구조 차이(금융업·건설업 등), 금리·환율·업황 같은 향후 변수, 주가·시가총액은 반영하지 않습니다. '
     '5대 리스크 점수는 3단계 판정(20/10/0점)이라 같은 등급 안의 미세한 차이는 드러나지 않습니다. '
     '<b>투자 판단·신용평가가 아니며</b>, 최종 판단 전에는 DART 원문과 업종 비교군을 함께 확인하세요. '
-    '모든 수치는 <b>연결재무제표 우선</b>(없으면 별도) · <b>기말잔액 기준</b>입니다.'
+    '모든 수치는 <b>연결재무제표 우선</b>(없으면 별도) · <b>기말잔액 기준</b>입니다. '
+    '자본잠식(자본총계 0 이하)인 해는 부채비율·ROE가 왜곡되어 계산하지 않고 <b>자본잠식</b>으로 표시합니다.'
 )
 
 KPI_TMPL = (
@@ -923,6 +924,8 @@ def render_summary(analysis):
         # 리스크는 위험 신호(🔴/🟡)에만 색을 준다. 안전은 무채색.
         risky = risk["grade"] in ("danger", "caution")
         risk_note = ("%s %s" % (light, grade_label)) if risky else grade_label
+        if risk.get("capital_impaired"):        # 자본잠식은 점수와 별개로 먼저 보이게
+            risk_note = "자본잠식 · " + risk_note
         disclosure_note = d_sub if (company.get("disclosure") or {}).get("status") == "ok" else ""
 
         links = statements_of(company, latest)
@@ -1132,6 +1135,11 @@ def table_ratios(companies, years):
     df = build_table(companies, years, rows, ratio_of)
     show_table(df, digits=1)
     st.caption("단위 % · 성장률은 전년 대비")
+    impaired = ["%s %d" % (c["name"], y) for c in companies for y in years
+                if fs.capital_impaired_info(c, y)["impaired"]]
+    if impaired:
+        st.caption("자본잠식(자본총계 0 이하): %s — 부채비율·ROE는 음수 자본으로 왜곡되어 비워 둡니다."
+                   % ", ".join(impaired))
 
 
 def table_dupont(companies, years):
@@ -1426,7 +1434,7 @@ def render_tab1(analysis):
             "| 유동비율 | 유동자산 ÷ 유동부채 × 100 | 100% 미만이면 단기 지급 부담 |\n"
             "| 매출액·영업이익 증가율 | (당기 − 전기) ÷ \\|전기\\| × 100 | 전기가 적자면 부호가 뒤집히지 않게 절댓값으로 나눔 |\n"
         )
-        st.caption("ROE는 기말 자본 기준입니다. (기초+기말)/2 평균자본 기준과는 값이 조금 다를 수 있습니다.")
+        st.caption("ROE는 기말 자본 기준입니다. (기초+기말)/2 평균자본 기준과는 값이 조금 다를 수 있습니다. 자본잠식(자본총계 0 이하)인 해는 부채비율·ROE를 계산하지 않습니다.")
 
 
 # ---------------------------------------------------------------------------
@@ -1614,6 +1622,9 @@ def render_tab3(analysis):
             st.markdown("**%s · %d점 · %s**" % (company["name"], risk["score"], STATE_STYLE[risk["grade"]][1]))
         table_risk(company)
         quote_box(risk["comment"])
+        if risk.get("capital_impaired"):
+            st.warning("%s — 부채비율·ROE·DuPont은 음수 자본으로 왜곡되어 계산하지 않습니다."
+                       % (risk.get("capital_impaired_text") or "자본잠식 상태입니다"))
         if risk.get("z_score") is not None:
             st.caption("Altman Z''-Score(장부가 기준) %.2f — 2.6 이상 안전 / 1.1~2.6 회색 / 1.1 미만 부실 위험 · 연속 영업적자 %d년"
                        % (risk["z_score"], risk["op_loss_streak"]))

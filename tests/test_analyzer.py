@@ -917,3 +917,307 @@ def test_call_json_raises_after_retries(monkeypatch):
     monkeypatch.setattr(fs.time, "sleep", lambda seconds: None)
     with pytest.raises(urllib.error.URLError):
         fs.call_json("fnlttSinglAcnt.json", {"crtfc_key": "x"})
+
+
+# ---------------------------------------------------------------------------
+# 12. 계정명 정규화·별칭 — 띄어쓰기('자본 총계')와 '연결당기순이익'
+# ---------------------------------------------------------------------------
+# 품질 감사에서 실제로 놓쳤던 두 가지:
+#   · 금호석유화학 2023 전체재무제표는 '자본 총계'(공백)라 정확 일치가 실패했다.
+#   · 현대자동차 2022 손익계산서 계정명은 '연결당기순이익'이라 후보에 없었다.
+
+def test_normalize_name_ignores_every_kind_of_space():
+    assert fs.normalize_name("자본 총계") == "자본총계"
+    assert fs.normalize_name("자본\u00a0총계") == "자본총계"      # 줄바꿈 없는 공백(NBSP)
+    assert fs.normalize_name(" 영업활동  현금흐름\n") == "영업활동현금흐름"
+    assert fs.normalize_name(None) == ""
+
+
+def _statement_rows():
+    """주요계정 응답 흉내 — 공백 계정명·연결당기순이익·연결/별도 혼재."""
+    return [
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "매출액",
+         "thstrm_amount": "1,000", "frmtrm_amount": "900"},
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "연결당기순이익",
+         "thstrm_amount": "120", "frmtrm_amount": "80"},
+        {"fs_div": "CFS", "sj_div": "BS", "account_nm": "자산총계",
+         "thstrm_amount": "2,000", "frmtrm_amount": "1,800"},
+        {"fs_div": "CFS", "sj_div": "BS", "account_nm": "부채총계",
+         "thstrm_amount": "700", "frmtrm_amount": "600"},
+        {"fs_div": "CFS", "sj_div": "BS", "account_nm": "자본 총계",       # 공백 표기
+         "thstrm_amount": "1,300", "frmtrm_amount": "1,200"},
+        {"fs_div": "OFS", "sj_div": "BS", "account_nm": "자본총계",
+         "thstrm_amount": "999,999", "frmtrm_amount": "999,999"},          # 별도는 쓰지 않는다
+    ]
+
+
+def test_fetch_statement_matches_names_ignoring_spaces(monkeypatch):
+    monkeypatch.setattr(fs, "call_json",
+                        lambda endpoint, params, attempts=2: {"status": "000", "list": _statement_rows()})
+    fs_div, _fs_nm, _rcept, accounts = fs.fetch_statement("KEY", "00100000", 2023)
+
+    assert fs_div == "CFS"
+    # '자본 총계' → 자본총계로 인식 (별도재무제표 999,999 를 집어오면 실패)
+    assert accounts["equity"]["amount"] == 1300
+    assert accounts["equity"]["account_nm"] == "자본 총계"
+    # '연결당기순이익' 별칭
+    assert accounts["net_income"]["amount"] == 120
+    assert accounts["net_income"]["account_nm"] == "연결당기순이익"
+
+
+def test_pick_account_prefers_ifrs_tag_over_name():
+    # 같은 계정이 표준태그 행과 이름 행 두 개로 올 때는 표준태그를 먼저 쓴다.
+    rows = [
+        {"sj_div": "IS", "account_id": "", "account_nm": "매출액", "thstrm_amount": "1"},
+        {"sj_div": "IS", "account_id": "ifrs-full_Revenue", "account_nm": "수익(매출액)", "thstrm_amount": "2"},
+    ]
+    spec = {"key": "revenue", "sj_div": ("IS", "CIS"),
+            "names": ("매출액", "수익(매출액)"), "ids": ("ifrs-full_Revenue",)}
+    found = fs.pick_account(spec, fs.unique_rows_of(rows))
+    assert found["thstrm_amount"] == "2"
+
+
+# ---------------------------------------------------------------------------
+# 13. fetch_extra_accounts — 실제 조회된 fs_div(CFS/OFS)를 따라간다
+# ---------------------------------------------------------------------------
+# 연결재무제표가 없는 회사(이스타코·성지건설 등)는 fs_div='CFS' 고정 탓에
+# 현금흐름·이자비용·이익잉여금이 전 연도 N/A 였다.
+
+def _extra_rows(with_fs_div=False):
+    rows = [
+        {"sj_div": "CF", "account_nm": "영업활동 현금흐름", "thstrm_amount": "300"},
+        {"sj_div": "IS", "account_nm": "이자비용", "thstrm_amount": "50"},
+        {"sj_div": "BS", "account_nm": "이익잉여금", "thstrm_amount": "400"},
+    ]
+    if with_fs_div:
+        for row in rows:
+            row["fs_div"] = "OFS"
+    return rows
+
+
+def test_fetch_extra_accounts_falls_back_to_ofs_when_cfs_is_empty(monkeypatch):
+    requested = []
+
+    def fake_call(endpoint, params, attempts=2):
+        requested.append(params["fs_div"])
+        if params["fs_div"] == "CFS":
+            return {"status": "013", "message": "조회된 데이터가 없습니다."}
+        return {"status": "000", "list": _extra_rows()}
+
+    monkeypatch.setattr(fs, "call_json", fake_call)
+    extras = fs.fetch_extra_accounts("KEY", "00100000", 2023)
+
+    assert requested == ["CFS", "OFS"]              # 연결이 없으면 별도로 물러난다
+    assert extras["op_cash_flow"]["amount"] == 300
+    assert extras["interest_expense"]["amount"] == 50
+
+
+def test_fetch_extra_accounts_follows_given_fs_div_first(monkeypatch):
+    requested = []
+
+    def fake_call(endpoint, params, attempts=2):
+        requested.append(params["fs_div"])
+        return {"status": "000", "list": _extra_rows()}
+
+    monkeypatch.setattr(fs, "call_json", fake_call)
+    fs.fetch_extra_accounts("KEY", "00100000", 2023, fs_div="OFS")
+
+    assert requested == ["OFS"]                     # 별도로 분석했으면 별도를 먼저
+
+
+def test_fetch_extra_accounts_keeps_only_the_requested_statement(monkeypatch):
+    rows = _extra_rows(with_fs_div=True)
+    rows.append({"fs_div": "CFS", "sj_div": "CF", "account_nm": "영업활동현금흐름",
+                 "thstrm_amount": "999"})
+
+    def fake_call(endpoint, params, attempts=2):
+        return {"status": "000", "list": rows}
+
+    monkeypatch.setattr(fs, "call_json", fake_call)
+    extras = fs.fetch_extra_accounts("KEY", "00100000", 2023, fs_div="OFS")
+
+    assert extras["op_cash_flow"]["amount"] == 300   # CFS 999 를 섞지 않는다
+
+
+def test_fetch_extra_accounts_fills_missing_core_accounts(monkeypatch):
+    # 한화·금호석유화학 2023: 주요계정 API에 자본총계가 아예 없다.
+    rows = _extra_rows() + [
+        {"sj_div": "BS", "account_nm": "자본 총계", "thstrm_amount": "1,300", "frmtrm_amount": "1,200"},
+        {"sj_div": "IS", "account_nm": "매출액", "thstrm_amount": "9,999"},
+    ]
+
+    def fake_call(endpoint, params, attempts=2):
+        return {"status": "000", "list": rows}
+
+    monkeypatch.setattr(fs, "call_json", fake_call)
+    known = {"revenue": {"amount": 1000.0}}          # 매출액은 이미 있다
+    extras = fs.fetch_extra_accounts("KEY", "00100000", 2023, fs_div="CFS", known_accounts=known)
+
+    assert extras["equity"]["amount"] == 1300        # 빠진 핵심 계정은 채운다
+    assert extras["equity"]["prev_amount"] == 1200
+    assert "revenue" not in extras                   # 있는 값은 덮어쓰지 않는다
+
+
+def test_fetch_extra_accounts_without_known_accounts_does_not_return_core(monkeypatch):
+    rows = _extra_rows() + [{"sj_div": "BS", "account_nm": "자본총계", "thstrm_amount": "1,300"}]
+    monkeypatch.setattr(fs, "call_json",
+                        lambda endpoint, params, attempts=2: {"status": "000", "list": rows})
+    extras = fs.fetch_extra_accounts("KEY", "00100000", 2023)
+    assert "equity" not in extras                    # 핵심 계정 보완은 요청했을 때만
+    assert extras["interest_expense"]["amount"] == 50
+
+
+def test_collect_company_passes_used_fs_div_and_known_accounts(monkeypatch):
+    captured = {}
+
+    def fake_statement(api_key, corp_code, year, fs_div_pref=("CFS", "OFS")):
+        return "OFS", "재무제표", "2026%08d" % year, {"revenue": {"amount": 100.0}}
+
+    def fake_extras(api_key, corp_code, year, fs_div=None, known_accounts=None):
+        captured["fs_div"] = fs_div
+        captured["known"] = dict(known_accounts or {})
+        return {}
+
+    monkeypatch.setattr(fs, "fetch_statement", fake_statement)
+    monkeypatch.setattr(fs, "fetch_extra_accounts", fake_extras)
+    monkeypatch.setattr(fs, "fetch_statement_links", lambda rcept_no, **kwargs: {})
+
+    corp = {"corp_name": "테스트", "corp_code": "00000001", "stock_code": "000001"}
+    fs.collect_company("KEY", corp, [2024, 2025], verbose=False)
+
+    assert captured["fs_div"] == "OFS"                # 주요계정이 별도였으면 별도로 조회
+    assert captured["known"] == {"revenue": {"amount": 100.0}}
+
+
+# ---------------------------------------------------------------------------
+# 14. 자본잠식(자본총계 ≤ 0) — 비율 왜곡 차단 + '자본잠식' 표시
+# ---------------------------------------------------------------------------
+# 태영건설 2023: 자본 -4,402억, 부채비율 -1,154%, ROE 도 부호가 뒤집혀 나왔다.
+
+IMPAIRED = {
+    2022: {"revenue": 1000, "op_income": 50, "net_income": 30,
+           "assets": 1300, "current_assets": 600, "liabilities": 900,
+           "current_liab": 500, "equity": 400},
+    2023: {"revenue": 900, "op_income": -100, "net_income": -150,
+           "assets": 1200, "current_assets": 500, "liabilities": 1400,
+           "current_liab": 800, "equity": -200,            # 자본잠식
+           "interest_expense": 60, "op_cash_flow": -120, "retained_earnings": -300},
+}
+
+
+def test_compute_ratios_skips_ratios_when_equity_is_negative():
+    years_data, years = make_years(IMPAIRED)
+    fs.compute_ratios(years_data, years)
+
+    latest = years_data[2023]
+    assert latest["capital_impaired"] is True
+    assert latest["ratios"]["debt_ratio"] is None       # -700% 같은 왜곡값을 만들지 않는다
+    assert latest["ratios"]["roe"] is None              # 적자인데 +75% 가 나오던 자리
+    assert latest["dupont"]["equity_multiplier"] is None
+    assert latest["dupont"]["roe"] is None
+    # 자본과 무관한 비율은 그대로 계산한다.
+    assert latest["ratios"]["op_margin"] == pytest.approx(-100 / 900 * 100)
+    assert latest["ratios"]["current_ratio"] == pytest.approx(62.5)
+    # 전년(자본 양수)은 정상 계산
+    assert years_data[2022]["capital_impaired"] is False
+    assert years_data[2022]["ratios"]["debt_ratio"] == pytest.approx(225.0)
+
+
+def test_capital_impaired_info_text_and_amount():
+    years_data, years = make_years(IMPAIRED)
+    company = {"name": "테스트", "years": years_data}
+
+    info = fs.capital_impaired_info(company, 2023)
+    assert info["impaired"] is True
+    assert info["amount"] == -200
+    assert info["text"].startswith("자본잠식")
+
+    ok = fs.capital_impaired_info(company, 2022)
+    assert ok["impaired"] is False and ok["text"] == ""
+    assert fs.capital_impaired_info({"years": {}}, 2023)["impaired"] is False
+
+
+def test_evaluate_risk_marks_capital_impairment_as_danger_not_na():
+    years_data, years = make_years(IMPAIRED)
+    fs.compute_ratios(years_data, years)
+    company = {"name": "테스트", "years": years_data}
+
+    risk = fs.evaluate_risk(company, years)
+    item = [i for i in risk["items"] if i["key"] == "debt_ratio"][0]
+
+    assert item["value_text"] == "자본잠식"
+    assert item["state"] == "danger"                    # N/A 로 빠져 점수를 올려 주지 않는다
+    assert "자본잠식" in item["note"]
+    assert risk["capital_impaired"] is True
+    assert "자본잠식" in risk["capital_impaired_text"]
+    assert "자본잠식" in risk["comment"]
+    assert item["max"] == 20                            # 분모에 포함(자본잠식은 N/A 가 아니다)
+    assert risk["available_count"] == 5                 # 5개 항목 모두 평가됨
+    assert risk["score"] < 60 and risk["grade"] == "danger"
+
+
+def test_evaluate_risk_healthy_company_is_not_marked_impaired():
+    years_data, years = make_years(NORMAL)
+    fs.compute_ratios(years_data, years)
+    company = {"name": "정상", "years": years_data}
+
+    risk = fs.evaluate_risk(company, years)
+    assert risk["capital_impaired"] is False
+    assert risk["capital_impaired_text"] == ""
+    assert [i for i in risk["items"] if i["key"] == "debt_ratio"][0]["value_text"] != "자본잠식"
+
+
+# ---------------------------------------------------------------------------
+# 15. 공시 위험 키워드 — 채권은행·관리절차(워크아웃)·자본잠식
+# ---------------------------------------------------------------------------
+# 태영건설 2023-12-28 실제 공시명 '채권은행등의관리절차개시신청'을
+# 예전 키워드 목록은 하나도 잡지 못했다(재현율 0).
+
+def _disclosure(monkeypatch, titles):
+    rows = [{"corp_code": "00100000", "corp_name": "테스트",
+             "report_nm": title, "rcept_no": "20231228%08d" % index, "rcept_dt": "20231228"}
+            for index, title in enumerate(titles)]
+
+    def fake_call(endpoint, params, attempts=2):
+        return {"status": "000", "list": rows, "total_count": len(rows), "total_page": 1}
+
+    monkeypatch.setattr(fs, "call_json", fake_call)
+    return fs.fetch_disclosure_risks("KEY", "00100000")
+
+
+def test_disclosure_catches_creditor_bank_workout_disclosure(monkeypatch):
+    result = _disclosure(monkeypatch, ["채권은행등의관리절차개시신청"])
+
+    assert result["status"] == "ok"
+    match = result["matches"][0]
+    assert match["severity"] == "severe"
+    assert match["labels"] == ["채권은행 관리절차(워크아웃) 신청"]   # 두 키워드가 걸려도 라벨은 하나
+
+
+def test_disclosure_catches_event_of_default_and_capital_impairment(monkeypatch):
+    result = _disclosure(monkeypatch, [
+        "상장채권기한의이익상실",
+        "반기검토의견부적정,의견거절또는완전자본잠식사실발생",
+    ])
+    labels = [label for match in result["matches"] for label in match["labels"]]
+
+    assert "기한의이익 상실(채무불이행)" in labels
+    assert "자본잠식" in labels
+    assert all(match["severity"] == "severe" for match in result["matches"])
+
+
+def test_disclosure_keyword_matching_ignores_spaces(monkeypatch):
+    # 공시명에 띄어쓰기가 들어와도(기재정정 포함) 같은 사건으로 잡는다.
+    result = _disclosure(monkeypatch, ["[기재정정]채권은행 등의 관리절차 개시 신청"])
+    assert result["status"] == "ok"
+    assert result["matches"][0]["labels"] == ["채권은행 관리절차(워크아웃) 신청"]
+
+
+def test_disclosure_normal_titles_are_not_flagged(monkeypatch):
+    result = _disclosure(monkeypatch, [
+        "타인에대한채무보증결정",
+        "단일판매ㆍ공급계약체결",
+        "기업지배구조보고서공시",
+    ])
+    assert result["status"] == "clear"
+    assert result["matches"] == []
