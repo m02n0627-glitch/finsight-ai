@@ -1585,13 +1585,21 @@ def fpa_baseline(company, year=None):
 
 
 def fpa_default_assumptions(baseline):
-    """슬라이더 기본값 — 고정비 비중은 관행값, CAPEX 비율은 최근 공시 CAPEX ÷ 매출."""
+    """
+    슬라이더 기본값 — 고정비 비중은 관행값, CAPEX 비율은 최근 공시 CAPEX ÷ 매출.
+
+    CAPEX 비율은 슬라이더 간격(0.5%p)에 맞춰 반올림한다. 그래야 화면에 보이는 기본값과
+    실제 계산 값이 어긋나지 않는다(예: 공시 14.2% → 슬라이더 14.0%).
+    """
     capex_pct = (baseline or {}).get("capex_ratio")
     if capex_pct is None:
         capex_pct = 0.0
+    step = FPNA_RANGES["capex_pct"][2]
+    high = FPNA_RANGES["capex_pct"][1]
+    snapped = round(max(0.0, min(high, capex_pct)) / step) * step
     return {
         "fixed_cost_ratio_pct": FPNA_DEFAULT_FIXED_COST_RATIO,
-        "capex_pct": round(max(0.0, min(FPNA_RANGES["capex_pct"][1], capex_pct)), 1),
+        "capex_pct": round(snapped, 1),
     }
 
 

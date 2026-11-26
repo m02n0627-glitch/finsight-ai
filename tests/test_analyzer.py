@@ -2129,6 +2129,9 @@ def test_fpa_default_assumptions_use_disclosed_capex_ratio() -> None:
     defaults = fs.fpa_default_assumptions(fs.fpa_baseline(fpa_company()))
     assert defaults["fixed_cost_ratio_pct"] == pytest.approx(fs.FPNA_DEFAULT_FIXED_COST_RATIO)
     assert defaults["capex_pct"] == pytest.approx(12.0)
+    # 슬라이더 간격(0.5%p)에 맞춰 반올림 — 화면 기본값과 계산값이 어긋나지 않게
+    assert fs.fpa_default_assumptions({"capex_ratio": 14.2})["capex_pct"] == pytest.approx(14.0)
+    assert fs.fpa_default_assumptions({"capex_ratio": 99.0})["capex_pct"] == pytest.approx(30.0)
     # CAPEX 미공시면 0%에서 시작한다
     assert fs.fpa_default_assumptions({"capex_ratio": None})["capex_pct"] == 0.0
 
@@ -2331,7 +2334,8 @@ def test_simulate_fpa_scenarios_handles_missing_cash_depreciation_and_interest()
     assert all(row["ending_cash"] is None for row in custom["years"])
     assert all(row["interest_coverage"] is None for row in custom["years"])
     assert custom["cum_fcf"] is not None
-    assert any("보수적으로" in line for line in result["insights"])
+    assert result["depreciation_available"] is False      # 화면이 이 값으로 'EBITDA=영업이익' 고지를 띄운다
+    assert "FCF" in result["insights"][1]
 
 
 def test_simulate_fpa_scenarios_revenue_missing_or_zero() -> None:
