@@ -49,6 +49,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import analyzer as fs  # noqa: E402  (FinSight 분석 엔진)
+import excel_export as excel  # noqa: E402  (원클릭 엑셀 리포트)
 
 # 기업 목록 캐시는 저장소가 아니라 임시 폴더에 둔다. (Streamlit Cloud 파일 시스템은 휘발성)
 fs.CORP_CACHE_FILE = os.path.join(tempfile.gettempdir(), "finsight_corp_codes.json")
@@ -76,6 +77,8 @@ st.set_page_config(
 PALETTE = ["#111827", "#4F46E5"]                # 비교 모드에서 회사별 색 (다크 슬레이트 · 블루)
 DART_KEY_URL = "https://opendart.fss.or.kr/uss/umt/EgovMberSbscrbView.do"
 ANCHOR_ID = "analysis-result"                    # 결과 영역 스크롤 앵커
+EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+EXCEL_SHEETS_NOTE = "4개 시트 — 요약·리스크 / 재무제표·비율 / DuPont·CCC / 동종업계·공시"
 
 # 검색어가 회사 정식 명칭과 다를 때 통하는 별칭 (초보자용)
 ALIASES = {
@@ -1790,11 +1793,34 @@ def scroll_script(anchor_id=ANCHOR_ID):
 """ % {"id": anchor_id}
 
 
+def render_excel_download(analysis):
+    """결과 상단 — 한 번에 받아 보는 엑셀(.xlsx) 리포트 다운로드 (딥블랙·인디고 톤 유지)."""
+    try:
+        payload = excel.build_excel_report(analysis)
+        filename = excel.excel_filename(analysis)
+    except Exception as error:              # 리포트를 못 만들어도 화면 분석 결과는 그대로 둔다
+        st.caption("엑셀 리포트를 만들지 못했습니다 — %s" % error)
+        return
+    left, right = st.columns([2.4, 1])
+    with left:
+        st.caption(EXCEL_SHEETS_NOTE)
+    with right:
+        st.download_button(
+            "📥 엑셀(.xlsx) 리포트 다운로드",
+            data=payload,
+            file_name=filename,
+            mime=EXCEL_MIME,
+            key="fs2_excel_download",
+            use_container_width=True,
+        )
+
+
 def render_results(analysis):
     # 결과 영역 앵커 — 부드러운 스크롤의 목적지
     st.markdown('<div id="%s" style="scroll-margin-top:14px"></div>' % ANCHOR_ID, unsafe_allow_html=True)
 
     render_result_head(analysis)
+    render_excel_download(analysis)
     render_summary(analysis)
     render_disclosure_alert(analysis["companies"])
     with st.expander("ⓘ 분석 기준 및 한계 보기"):

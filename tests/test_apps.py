@@ -165,6 +165,25 @@ def test_app_v2_renders_analysis_and_marks_capital_impairment(monkeypatch, patch
     assert "삼성전자" in text
 
 
+def test_app_v2_offers_excel_report_download(monkeypatch, patched_engine):
+    """결과 상단에 엑셀(.xlsx) 다운로드 버튼과 4개 시트 안내가 그려진다."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = AppTest.from_file(APP_V2, default_timeout=60)
+    at.run()
+    assert not at.exception
+
+    at.text_input(key="fs2_main_query").set_value("삼성")
+    at.run()
+    at.get_by_key("fs2_run").click()
+    at.run()
+
+    assert not at.exception
+    downloads = at.download_button
+    assert len(downloads) == 1
+    assert "엑셀(.xlsx) 리포트 다운로드" in downloads[0].label
+    assert "4개 시트" in _texts(at)
+
+
 def test_app_v2_renders_industry_comparison(monkeypatch, patched_engine):
     """동종업계 비교 — 요약 한 줄 · 비교 표(대상/피어 평균/피어 중앙값/개별 피어)가 그려진다."""
     monkeypatch.setenv("DART_API_KEY", FAKE_KEY)

@@ -37,6 +37,8 @@
 
 **③ 리스크 상세 & DART 원문** — 5개 항목 신호등 표와 판정 기준, 최근 1년 공시 제목의 위험 키워드, 연도별 사업보고서 링크.
 
+**📥 엑셀(.xlsx) 리포트** — 결과 상단의 `📥 엑셀(.xlsx) 리포트 다운로드` 버튼 한 번으로 4개 시트를 받습니다. `요약 및 리스크`(총점·등급·5대 항목·공시 위험) / `재무제표 및 비율`(억원·천 단위 쉼표, 7대 비율, 자본잠식 표기) / `DuPont 및 CCC`(3요인 분해·순차 대체법 격차·DSO/DIO/DPO/CCC) / `동종업계 및 공시`(피어 비교표·공시 위험 목록과 DART 원문 URL). 파일명은 `FinSight_{기업명}_{기준연도}.xlsx` 입니다.
+
 두 가지 레이아웃을 제공합니다. `app.py`는 사이드바 설정형, `app_v2.py`는 사이드바 없는 중앙 집중형입니다.
 
 **엔진** — CLI로도 같은 분석을 돌릴 수 있습니다. `python3 analyzer.py 삼성전자 SK하이닉스` 는 콘솔 요약과 `report_삼성전자_vs_SK하이닉스.html`(Chart.js, 파일 하나로 동작)을 만듭니다. 앱과 CLI 모두 `analyzer.py`의 함수만 호출합니다.
@@ -81,13 +83,14 @@ finsight-ai/
 ├── app_v2.py                       # 웹 앱 v2 — 중앙 집중형 UI
 ├── app.py                          # 웹 앱 v1 — 사이드바 UI
 ├── analyzer.py                     # 분석 엔진 — DART 호출 · 비율/DuPont/CCC · 리스크 · 동종업계 피어 비교 · HTML 대시보드
+├── excel_export.py                 # 원클릭 엑셀(.xlsx) 리포트 — 4개 시트 · 서식 · 자본잠식 표기 (openpyxl)
 ├── corp_codes_seed.json            # 상장사 목록 시드 (공개 데이터 · 최초 실행 시 다운로드 대신 사용)
 ├── industry_map_seed.json          # 업종코드 시드 — 상장사 118개사의 corp_code·종목코드·induty_code (피어 선정용, 키·재무수치 없음)
 ├── statement_links_seed.json       # 주요 상장사 재무제표 직행 링크 시드 (접수번호만)
 ├── tests/
 │   ├── test_analyzer.py            # 계산·피어 선정 로직 단위 테스트 (pytest · 네트워크 불필요)
 │   └── test_apps.py                # Streamlit 화면 렌더링 테스트 (AppTest · 네트워크 불필요)
-├── requirements.txt                # streamlit>=1.32 · plotly>=5.18 · pandas>=2.0
+├── requirements.txt                # streamlit>=1.32 · plotly>=5.18 · pandas>=2.0 · openpyxl>=3.1
 ├── .streamlit/
 │   ├── config.toml                 # 테마
 │   └── secrets.toml.example        # 인증키 형식 예시 (실제 키 아님)

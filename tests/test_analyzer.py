@@ -20,13 +20,16 @@ import os
 import re
 import sys
 import urllib.error
+from io import BytesIO
 
 import pytest
+from openpyxl import load_workbook
 
 # 저장소 루트의 analyzer.py 를 불러온다. (tests/ 의 부모 폴더)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import analyzer as fs  # noqa: E402
+import excel_export as xl  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -1612,3 +1615,284 @@ def test_build_analysis_attaches_peers_only_for_single_company(monkeypatch):
         {"corp_name": "LG전자", "corp_code": "00066000", "stock_code": "066570"},
     ], [2024, 2025], verbose=False)
     assert twice["industry_peers"] is None
+
+
+# ---------------------------------------------------------------------------
+# 9. 엑셀(.xlsx) 리포트 — excel_export.build_excel_report
+# ---------------------------------------------------------------------------
+
+# 실제 규모에 가까운 2개년 (2024년 매출 1.0조원 → 10,000억원)
+EXCEL_ACCOUNTS = {
+    2023: {"revenue": 1.2e12, "op_income": 8.0e10, "net_income": 4.0e10,
+           "assets": 2.0e12, "current_assets": 9.0e11, "liabilities": 1.4e12,
+           "current_liab": 6.0e11, "equity": 6.0e11,
+           "interest_expense": 2.0e10, "op_cash_flow": 9.0e10, "retained_earnings": 2.0e11,
+           "cost_of_sales": 9.0e11, "receivables": 1.5e11, "inventory": 1.2e11, "payables": 8.0e10},
+    2024: {"revenue": 1.0e12, "op_income": -6.0e10, "net_income": -3.0e10,
+           "assets": 1.9e12, "current_assets": 8.0e11, "liabilities": 1.95e12,
+           "current_liab": 1.0e12, "equity": 5.0e10,
+           "interest_expense": 3.0e10, "op_cash_flow": -2.0e10, "retained_earnings": -6.0e10,
+           "cost_of_sales": 8.0e11, "receivables": 1.3e11, "inventory": 1.0e11, "payables": 9.0e10},
+}
+
+# 비교용 두 번째 기업 — 흑자 기업(ROE 격차가 실제로 생기게)
+EXCEL_ACCOUNTS_B = {
+    2023: {"revenue": 1.5e12, "op_income": 1.2e11, "net_income": 8.0e10,
+           "assets": 2.4e12, "current_assets": 1.1e12, "liabilities": 1.6e12,
+           "current_liab": 7.0e11, "equity": 8.0e11,
+           "interest_expense": 1.5e10, "op_cash_flow": 1.3e11, "retained_earnings": 3.0e11,
+           "cost_of_sales": 1.0e12, "receivables": 2.0e11, "inventory": 1.5e11, "payables": 1.1e11},
+    2024: {"revenue": 1.6e12, "op_income": 1.4e11, "net_income": 9.0e10,
+           "assets": 2.6e12, "current_assets": 1.2e12, "liabilities": 1.7e12,
+           "current_liab": 8.0e11, "equity": 9.0e11,
+           "interest_expense": 1.4e10, "op_cash_flow": 1.5e11, "retained_earnings": 3.9e11,
+           "cost_of_sales": 1.05e12, "receivables": 2.1e11, "inventory": 1.6e11, "payables": 1.2e11},
+}
+
+CLEAR_DISCLOSURE = {
+    "status": "clear", "matches": [], "scanned": 40, "total": 40, "pages": 1,
+    "truncated": False, "oldest": "2024-12-01", "period": "2025-11-26 ~ 2026-11-26",
+    "error": "", "corrections": 0,
+}
+
+
+def excel_company(name="삼성전자", corp_code="00126380", stock_code="005930",
+                  impaired=False, disclosure=None, accounts=None):
+    """엑셀 리포트 테스트용 기업 dict — 비율·CCC·리스크·코멘트까지 실제 엔진으로 채운다."""
+    source = accounts or EXCEL_ACCOUNTS
+    values_by_year = {year: dict(values) for year, values in source.items()}
+    if impaired and 2024 in values_by_year:
+        values_by_year[2024]["equity"] = -5.0e10
+
+    years_data = {}
+    for year, values in values_by_year.items():
+        years_data[year] = {
+            "accounts": {key: {"amount": value} for key, value in values.items()},
+            "rcept_no": "20250330%06d" % (year - 2000),
+            "fs_div": "CFS",
+            "statement_links": {"income": "", "balance": "", "cashflow": "",
+                                "main": "", "labels": {}, "fallback": False},
+        }
+    years = sorted(years_data)
+    fs.compute_ratios(years_data, years)
+    fs.compute_working_capital(years_data, years)
+
+    company = {
+        "name": name, "corp_code": corp_code, "stock_code": stock_code,
+        "years": years_data, "fs_div": "CFS", "fs_nm": "연결재무제표",
+        "latest_rcept_no": years_data[years[-1]]["rcept_no"],
+        "statement_links": {year: years_data[year]["statement_links"] for year in years},
+        "disclosure": disclosure or dict(CLEAR_DISCLOSURE),
+    }
+    company["risk"] = fs.evaluate_risk(company, years)
+    company["dupont_comment"] = fs.make_dupont_comment(company, years[-1])
+    company["ccc_comment"] = fs.make_ccc_comment(company, years)
+    return company
+
+
+def excel_analysis(companies, industry=None):
+    years = [2023, 2024]
+    return {
+        "companies": companies,
+        "years": years,
+        "dupont_gap": fs.build_dupont_gap(companies, years[-1]) if len(companies) == 2 else None,
+        "ccc_gap": fs.build_ccc_gap(companies, years[-1]) if len(companies) == 2 else None,
+        "industry_peers": industry,
+    }
+
+
+def excel_industry_block():
+    target_values = {"op_margin": 12.0, "roe": 8.0, "debt_ratio": 70.0,
+                     "current_ratio": 150.0, "ccc": 70.0}
+    peers = [
+        {"corp_code": "00066000", "corp_name": "LG전자(주)", "name": "LG전자",
+         "stock_code": "066570", "induty_code": "264", "match": "same", "match_label": "동일 코드",
+         "metrics": {"op_margin": 6.0, "roe": 5.0, "debt_ratio": 90.0,
+                     "current_ratio": 120.0, "ccc": 80.0, "fs_nm": "연결재무제표"}},
+        {"corp_code": "00164779", "corp_name": "에스케이하이닉스(주)", "name": "SK하이닉스",
+         "stock_code": "000660", "induty_code": "2612", "match": "two", "match_label": "같은 2자리",
+         "metrics": {"op_margin": 20.0, "roe": 18.0, "debt_ratio": 50.0,
+                     "current_ratio": 180.0, "ccc": 60.0, "fs_nm": "연결재무제표"}},
+    ]
+    rows = fs.compare_peers(target_values, peers)
+    return {
+        "status": "ok", "name": "삼성전자", "year": 2024, "induty_code": "264",
+        "industry_name": "통신 및 방송장비 제조업", "sector": "반도체·전자",
+        "code_source": "seed", "levels": {"same": 1, "three": 0, "two": 1},
+        "excluded_holdings": 0, "fs_nm": "연결재무제표",
+        "target_values": target_values, "rows": rows, "peers": peers, "skipped": [],
+        "comment": fs.make_industry_comment(rows, "삼성전자", len(peers), 2024),
+    }
+
+
+def excel_book(analysis):
+    payload = xl.build_excel_report(analysis)
+    assert isinstance(payload, bytes) and payload[:2] == b"PK"     # xlsx(zip) 시그니처
+    return load_workbook(BytesIO(payload))
+
+
+def sheet_values(ws):
+    return [cell.value for row in ws.iter_rows() for cell in row if cell.value is not None]
+
+
+def row_of(ws, label):
+    for row in ws.iter_rows(min_col=1, max_col=1):
+        if row[0].value == label:
+            return row[0].row
+    raise AssertionError("'%s' 행을 찾지 못했습니다" % label)
+
+
+def test_excel_report_has_four_named_sheets_and_filename():
+    analysis = excel_analysis([excel_company()])
+    wb = excel_book(analysis)
+    assert wb.sheetnames == ["요약 및 리스크", "재무제표 및 비율", "DuPont 및 CCC", "동종업계 및 공시"]
+    assert xl.excel_filename(analysis) == "FinSight_삼성전자_2024.xlsx"
+
+
+def test_excel_summary_sheet_has_score_grade_and_five_risks():
+    company = excel_company(impaired=True)
+    wb = excel_book(excel_analysis([company]))
+    values = sheet_values(wb["요약 및 리스크"])
+
+    assert "삼성전자" in values
+    assert "%d점 / 100점" % company["risk"]["score"] in values
+    assert "자본잠식 · 위험" in values                       # 자본잠식은 등급을 위험으로 고정
+    assert "자본잠식 · 자본총계 -500억원" in values
+    assert "판정 기준" in values and "메모" in values       # 5대 리스크 표 헤더
+    for item in company["risk"]["items"]:
+        assert item["label"] in values                        # 5대 항목별 수치·점수·판정
+        assert item["value_text"] in values
+    assert "최근 1년 공시 위험 요약" in values
+    assert "0건 (최근 1년 위험 키워드 공시 없음)" in values     # 공시 위험 없음
+
+
+def test_excel_amounts_are_eok_with_comma_and_ratio_format():
+    wb = excel_book(excel_analysis([excel_company()]))
+    ws = wb["재무제표 및 비율"]
+
+    revenue_row = row_of(ws, "매출액")
+    assert ws.cell(row=revenue_row, column=2).value == 12000          # 1.2조원 → 12,000억원
+    assert ws.cell(row=revenue_row, column=3).value == 10000
+    assert ws.cell(row=revenue_row, column=2).number_format == "#,##0;[Red]-#,##0"
+
+    ratio_row = row_of(ws, "부채비율")
+    assert ws.cell(row=ratio_row, column=3).value == pytest.approx(3900.0)   # 1.95조 ÷ 500억
+    assert "%" in ws.cell(row=ratio_row, column=3).number_format
+
+
+def test_excel_marks_capital_impairment_in_ratio_table():
+    company = excel_company(impaired=True)
+    wb = excel_book(excel_analysis([company]))
+    ws = wb["재무제표 및 비율"]
+
+    for label in ("ROE (자기자본이익률)", "부채비율"):
+        row = row_of(ws, label)
+        assert isinstance(ws.cell(row=row, column=2).value, float)     # 2023년은 정상 계산
+        assert ws.cell(row=row, column=3).value == "자본잠식"           # 2024년 자본총계 음수
+        assert ws.cell(row=row, column=3).font.bold                     # 빨간 굵은 글씨
+
+    note_text = "\n".join(str(v) for v in sheet_values(ws))
+    assert "자본잠식(자본총계 0 이하): 삼성전자 2024" in note_text
+
+
+def test_excel_dupont_and_ccc_values():
+    company = excel_company()
+    wb = excel_book(excel_analysis([company]))
+    ws = wb["DuPont 및 CCC"]
+
+    assert "DuPont ROE 3요인 분해" in sheet_values(ws)
+    margin_row = row_of(ws, "순이익률 (%)")
+    assert ws.cell(row=margin_row, column=2).value == pytest.approx(3.3333, abs=0.001)
+    roe_row = row_of(ws, "DuPont ROE (%)")
+    assert ws.cell(row=roe_row, column=3).value == pytest.approx(
+        company["years"][2024]["dupont"]["roe"], abs=0.001)
+
+    ccc_row = row_of(ws, "CCC — 현금전환주기 (일)")
+    assert ws.cell(row=ccc_row, column=3).value == pytest.approx(
+        company["years"][2024]["ccc"]["ccc"], abs=0.001)
+    assert ws.cell(row=ccc_row, column=3).number_format == '#,##0"일"'
+
+
+def test_excel_two_companies_columns_and_dupont_gap():
+    a = excel_company()
+    b = excel_company("SK하이닉스", "00164779", "000660", accounts=EXCEL_ACCOUNTS_B)
+    analysis = excel_analysis([a, b])
+    assert analysis["dupont_gap"] and abs(analysis["dupont_gap"]["total"]) > 0.1
+
+    wb = excel_book(analysis)
+    ws = wb["재무제표 및 비율"]
+    header = row_of(ws, "계정")
+    assert [ws.cell(row=header, column=col).value for col in range(1, 6)] == [
+        "계정", "삼성전자 2023", "삼성전자 2024", "SK하이닉스 2023", "SK하이닉스 2024"]
+
+    dupont_ws = wb["DuPont 및 CCC"]
+    titles = "\n".join(str(v) for v in sheet_values(dupont_ws))
+    assert "ROE 격차 순차 대체법 분해" in titles
+    total_row = row_of(dupont_ws, "합계 — ROE 격차")
+    assert dupont_ws.cell(row=total_row, column=5).value == pytest.approx(
+        analysis["dupont_gap"]["total"], abs=0.01)
+    assert xl.excel_filename(analysis) == "FinSight_삼성전자_vs_SK하이닉스_2024.xlsx"
+
+
+def test_excel_industry_peers_and_disclosure_links():
+    disclosure = dict(CLEAR_DISCLOSURE)
+    disclosure.update({
+        "status": "ok", "scanned": 120, "total": 150, "corrections": 1,
+        "matches": [{
+            "labels": ["소송"], "severity": "severe", "report_nm": "소송등의제기",
+            "rcept_dt": "2025-05-01", "rcept_no": "20250501000001",
+            "url": fs.dart_link("20250501000001"), "correction": False, "subsidiary": False,
+        }],
+    })
+    analysis = excel_analysis([excel_company(disclosure=disclosure)],
+                              industry=excel_industry_block())
+    wb = excel_book(analysis)
+    ws = wb["동종업계 및 공시"]
+    values = sheet_values(ws)
+    text = "\n".join(str(v) for v in values)
+
+    assert "업종코드 264" in text
+    assert "피어 중앙값" in values and "피어 평균" in values
+    assert "LG전자" in values and "SK하이닉스" in values
+    assert "소송등의제기" in values and "심각" in values
+
+    url = fs.dart_link("20250501000001")
+    linked = [cell for row in ws.iter_rows() for cell in row
+              if cell.value == url and cell.hyperlink is not None]
+    assert linked and linked[0].hyperlink.target == url
+
+
+def test_excel_survives_missing_accounts():
+    company = excel_company(accounts={2023: {"revenue": 1.0e12}, 2024: {"revenue": 1.1e12}})
+    wb = excel_book(excel_analysis([company]))
+
+    ws = wb["재무제표 및 비율"]
+    revenue_row = row_of(ws, "매출액")
+    assert ws.cell(row=revenue_row, column=3).value == 11000
+    equity_row = row_of(ws, "자본총계")
+    assert ws.cell(row=equity_row, column=3).value == "-"            # 미공시 → 흐린 '-'
+
+    ccc_ws = wb["DuPont 및 CCC"]
+    ccc_row = row_of(ccc_ws, "CCC — 현금전환주기 (일)")
+    assert ccc_ws.cell(row=ccc_row, column=3).value == "-"
+
+
+def test_excel_industry_missing_is_quiet():
+    wb = excel_book(excel_analysis([excel_company()], industry=None))
+    text = "\n".join(str(v) for v in sheet_values(wb["동종업계 및 공시"]))
+    assert "동종업계 비교 없음" in text
+
+
+def test_excel_empty_analysis_raises():
+    with pytest.raises(ValueError):
+        xl.build_excel_report({})
+    with pytest.raises(ValueError):
+        xl.build_excel_report({"companies": [], "years": [2024]})
+
+
+def test_excel_filename_replaces_forbidden_characters():
+    company = excel_company(name="A/B:C*?")
+    filename = xl.excel_filename(excel_analysis([company]))
+    for char in '\\/:*?"<>|':
+        assert char not in filename
+    assert filename.endswith("_2024.xlsx")
