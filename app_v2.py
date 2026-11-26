@@ -831,6 +831,22 @@ APP_CSS = """
       .fs-hero-title { font-size: 24px; }
       .fs-result-title { font-size: 20px; }
       .st-key-fs2-inputcard, .st-key-fs2-keycard { padding: 18px 16px 16px !important; }
+
+      /* 요약 카드 4개 — 좁은 화면에서는 2×2로 접어 라벨이 단어 중간에서 끊기지 않게 한다 */
+      .fs-summary { padding: 16px 16px 18px; }
+      .fs-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; }
+      .fs-metric-lbl, .fs-metric-note { font-size: 11px; }
+      .fs-metric-val { font-size: 19px; }
+
+      /* 계정·동종업계 표 — 표만 가로로 넘겨 볼 수 있게(페이지 전체가 밀리지 않도록) */
+      div[data-testid="stMarkdownContainer"]:has(> table.fs-fintable) {
+          overflow-x: auto; -webkit-overflow-scrolling: touch;
+      }
+      .fs-fintable th, .fs-fintable td { padding: 6px 8px; font-size: 12px; }
+
+      /* 탭 4개가 최대한 한 줄에 보이도록 간격만 줄인다(남는 탭은 탭바 스크롤) */
+      .stTabs [data-baseweb="tab"] { padding: 0 10px; font-size: 12px; height: 40px; }
+      .stTabs [data-baseweb="tab-list"] { gap: 2px; }
   }
 </style>
 """
@@ -2272,7 +2288,7 @@ def render_fpa_simulator(company, latest):
         ocf, capex_value = baseline.get("op_cash_flow"), baseline.get("capex")
         if ocf is not None and capex_value is not None:
             st.caption("감가상각비가 공시 API에 없어 EBITDA를 영업이익으로 계산했습니다 — FCF가 그만큼 작게(보수적으로) 나옵니다. "
-                       "참고로 공시된 %d년 영업활동현금흐름 %s에서 CAPEX %s를 뺀 %s가 실제에 가까운 잉여현금흐름입니다."
+                       "참고로 공시된 %d년 영업활동현금흐름 %s에서 CAPEX %s을 뺀 %s이 실제에 가까운 잉여현금흐름입니다."
                        % (latest, human_won(ocf), human_won(capex_value), human_won(ocf - capex_value)))
         else:
             st.caption("감가상각비가 공시 API에 없어 EBITDA를 영업이익으로 계산했습니다 — FCF가 그만큼 작게(보수적으로) 나옵니다.")

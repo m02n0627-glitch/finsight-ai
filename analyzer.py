@@ -1751,44 +1751,49 @@ def _fpa_scenario(baseline, key, label, revenue_growth_pct, fixed_cost_ratio_pct
 def _fpa_insights(baseline, custom, scenarios):
     """시뮬레이터 아래에 붙는 핵심 인사이트 2~3줄(숫자 없으면 안내 문구로 대체)."""
     lines = []
+    custom = custom or {}
     revenue0 = baseline.get("revenue")
     op0 = baseline.get("op_income")
-    first = ((custom or {}).get("years") or [{}])[0]
+    first = (custom.get("years") or [{}])[0]
 
     # (1) 영업레버리지 — 매출 변화 대비 영업이익 변화
-    if (revenue0 and op0 not in (None, 0) and first.get("revenue")
-            and first.get("op_income") is not None):
+    if revenue0 and op0 not in (None, 0) and first.get("revenue") and first.get("op_income") is not None:
         rev_chg = (first["revenue"] / revenue0 - 1.0) * 100.0
         op_chg = (first["op_income"] - op0) / abs(op0) * 100.0
-        if baseline.get("cost_structure_available"):
+        fixed_ratio = custom.get("fixed_cost_ratio_pct", 0.0)
+        if not baseline.get("cost_structure_available"):
             lines.append(
-                "매출이 Y+1에 %+.1f%% 움직이면 영업이익은 %+.1f%% 움직입니다 — 판관비 중 고정비 비중 %.0f%%가 만드는 영업레버리지입니다."
-                % (rev_chg, op_chg, custom.get("fixed_cost_ratio_pct", 0.0)))
+                "매출원가·판관비가 공시되지 않아(금융업 등) 영업이익률을 출발 연도 수준(%s)으로 고정해 계산했습니다. "
+                "영업레버리지는 반영되지 않습니다." % fmt(baseline.get("op_margin")))
+        elif abs(rev_chg) < 0.05:
+            lines.append(
+                "매출 성장률 0%%에서는 영업이익이 출발 연도(%s)에 머뭅니다 — 판관비 중 고정비 비중 %.0f%%만큼 "
+                "매출이 움직일 때 영업이익이 더 크게 반응합니다(영업레버리지)."
+                % (short_won(op0), fixed_ratio))
         else:
             lines.append(
-                "매출원가·판관비가 공시되지 않아(금융업 등) 영업이익률을 출발 연도 수준(%s)으로 고정해 계산했습니다. 영업레버리지는 반영되지 않습니다."
-                % fmt(baseline.get("op_margin")))
-    # (2) 현금 — 누적 FCF와 기말 현금
-    cum = (custom or {}).get("cum_fcf")
+                "매출이 Y+1에 %+.1f%% 움직이면 영업이익은 %+.1f%% 움직입니다 — 판관비 중 고정비 비중 %.0f%%가 만드는 "
+                "영업레버리지입니다." % (rev_chg, op_chg, fixed_ratio))
+
+    # (2) 현금 — 누적 FCF와 기말 현금 (감가상각비 미공시 고지는 화면 캡션이 맡는다)
+    cum = custom.get("cum_fcf")
     if cum is not None:
-        end_cash = (custom or {}).get("end_cash")
+        end_cash = custom.get("end_cash")
         if end_cash is not None:
             lines.append("3년 누적 잉여현금흐름(FCF)은 %s, 기말 현금성자산은 기초 %s에서 %s이 됩니다."
                          % (short_won(cum), short_won(baseline.get("cash")), short_won(end_cash)))
         else:
-            lines.append("3년 누적 잉여현금흐름(FCF)은 %s입니다. 기초 현금성자산이 공시되지 않아 기말 현금 잔고는 계산하지 않았습니다."
-                         % short_won(cum))
-        if not baseline.get("depreciation_available"):
-            lines.append("감가상각비가 공시 API에 없어 EBITDA를 영업이익으로 계산했습니다 — FCF가 그만큼 보수적으로(작게) 나옵니다.")
-    elif not (custom or {}).get("wc_available"):
+            lines.append("3년 누적 잉여현금흐름(FCF)은 %s입니다. 기초 현금성자산이 공시되지 않아 "
+                         "기말 현금 잔고는 계산하지 않았습니다." % short_won(cum))
+    elif not custom.get("wc_available"):
         lines.append("CCC를 계산할 수 없어(금융업처럼 재고자산·매출원가 미공시) 운전자본 변동은 FCF에 넣지 않았습니다.")
+
     # (3) 경보 시점
-    alert = (custom or {}).get("alert")
+    alert = custom.get("alert")
     if alert:
         lines.append("내 시나리오에서는 %s" % alert["text"])
-    elif (custom or {}).get("first_icr_alert_step") is None and (custom or {}).get("first_cash_alert_step") is None:
-        if baseline.get("interest_available") or baseline.get("cash_available"):
-            lines.append((custom or {}).get("alert_text") or "")
+    elif custom.get("alert_text") and (baseline.get("interest_available") or baseline.get("cash_available")):
+        lines.append(custom["alert_text"])
     return [line for line in lines if line]
 
 
