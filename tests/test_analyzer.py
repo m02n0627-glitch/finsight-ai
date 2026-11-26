@@ -603,3 +603,95 @@ def test_collect_company_attaches_statement_links(monkeypatch):
     assert set(company["statement_links"]) == {2024, 2025}
     assert company["statement_links"][2025]["income"] == "viewer://income/202600002025"
     assert company["years"][2024]["statement_links"]["balance"] == "viewer://balance/202600002024"
+
+
+# ---------------------------------------------------------------------------
+# 기업 목록 — 저장소 시드 우선 + 다운로드 실패 시 물러나기 (네트워크 없이 검증)
+# ---------------------------------------------------------------------------
+
+SAMPLE_CORP_SEED = {
+    "saved_at": "2026-11-26T09:00:00",
+    "companies": [
+        {"corp_name": "삼성전자", "corp_code": "00126380", "stock_code": "005930"},
+        {"corp_name": "SK하이닉스", "corp_code": "00164779", "stock_code": "000660"},
+    ],
+}
+
+
+def _write_json(path, data):
+    import json
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(data, fp, ensure_ascii=False)
+    return str(path)
+
+
+def test_bundled_seed_file_is_ready():
+    """저장소에 실제로 커밋되는 시드 파일이 있고, 키 같은 비밀값이 없는지."""
+    import json
+    import os
+    path = fs.CORP_SEED_FILE
+    assert os.path.exists(path), "corp_codes_seed.json 이 저장소에 있어야 한다"
+    data = json.load(open(path, encoding="utf-8"))
+    assert len(data["companies"]) > 3000          # 상장사 4천여 개
+    row = data["companies"][0]
+    assert set(row) == {"corp_name", "corp_code", "stock_code"}
+    assert len(row["corp_code"]) == 8 and row["corp_code"].isdigit()
+    text = open(path, encoding="utf-8").read()
+    assert "crtfc_key" not in text and "crtfc" not in text
+
+
+def test_sync_corp_codes_uses_seed_without_download(monkeypatch, tmp_path):
+    seed = _write_json(tmp_path / "seed.json", SAMPLE_CORP_SEED)
+    monkeypatch.setattr(fs, "CORP_SEED_FILE", seed)
+    monkeypatch.setattr(fs, "CORP_CACHE_FILE", str(tmp_path / "cache.json"))
+    monkeypatch.setattr(fs, "_download_corp_codes",
+                        lambda *a, **k: pytest.fail("시드가 있으면 다운로드하지 않아야 한다"))
+    companies = fs.sync_corp_codes("x" * 40, verbose=False)
+    assert [c["corp_name"] for c in companies] == ["삼성전자", "SK하이닉스"]
+
+
+def test_sync_corp_codes_prefers_fresh_cache(monkeypatch, tmp_path):
+    from datetime import datetime
+    cache = dict(SAMPLE_CORP_SEED)
+    cache["companies"] = [{"corp_name": "캐시회사", "corp_code": "00000001", "stock_code": "000001"}]
+    cache["saved_at"] = datetime.now().isoformat(timespec="seconds")
+    monkeypatch.setattr(fs, "CORP_CACHE_FILE", _write_json(tmp_path / "cache.json", cache))
+    monkeypatch.setattr(fs, "CORP_SEED_FILE", _write_json(tmp_path / "seed.json", SAMPLE_CORP_SEED))
+    monkeypatch.setattr(fs, "_download_corp_codes",
+                        lambda *a, **k: pytest.fail("신선한 캐시가 있으면 다운로드하지 않는다"))
+    assert fs.sync_corp_codes("x" * 40, verbose=False)[0]["corp_name"] == "캐시회사"
+
+
+def test_sync_corp_codes_falls_back_to_seed_on_network_error(monkeypatch, tmp_path):
+    import urllib.error
+    seed = _write_json(tmp_path / "seed.json", SAMPLE_CORP_SEED)
+    monkeypatch.setattr(fs, "CORP_SEED_FILE", seed)
+    monkeypatch.setattr(fs, "CORP_CACHE_FILE", str(tmp_path / "cache.json"))
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(fs, "_download_corp_codes", boom)
+    companies = fs.sync_corp_codes("x" * 40, refresh=True, verbose=False)   # 강제 새로 받기도 실패 → 시드
+    assert len(companies) == 2
+
+
+def test_sync_corp_codes_raises_without_any_source(monkeypatch, tmp_path):
+    import urllib.error
+    monkeypatch.setattr(fs, "CORP_SEED_FILE", str(tmp_path / "none.json"))
+    monkeypatch.setattr(fs, "CORP_CACHE_FILE", str(tmp_path / "none-cache.json"))
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(fs, "_download_corp_codes", boom)
+    with pytest.raises(fs.DartError):
+        fs.sync_corp_codes("x" * 40, verbose=False)
+
+
+def test_seed_corp_cache_copies_only_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(fs, "CORP_SEED_FILE", _write_json(tmp_path / "seed.json", SAMPLE_CORP_SEED))
+    target = tmp_path / "cache.json"
+    assert fs.seed_corp_cache(str(target)) is True
+    assert target.exists()
+    assert fs.seed_corp_cache(str(target)) is False          # 이미 있으면 그대로

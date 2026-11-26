@@ -63,12 +63,12 @@ streamlit run app_v2.py     # v2 · 중앙 집중형 UI
 # CLI · HTML 대시보드
 python3 analyzer.py 삼성전자 SK하이닉스 --years 2023 2024 2025
 
-# 계산 로직 단위 테스트 (네트워크 불필요 · 33개 케이스)
+# 계산 로직 단위 테스트 (네트워크 불필요 · 39개 케이스)
 python3 -m pip install pytest
 python3 -m pytest tests/ -v
 ```
 
-`corp_codes.json`(기업 목록 캐시)과 `report_*.html` 은 첫 실행 때 자동으로 생기며 `.gitignore`로 제외됩니다.
+`corp_codes.json`(기업 목록 캐시)과 `report_*.html` 은 첫 실행 때 자동으로 생기며 `.gitignore`로 제외됩니다. 기업 목록은 저장소의 `corp_codes_seed.json`을 먼저 쓰므로, 첫 실행에서 3.6MB `corpCode.xml` 다운로드를 기다리지 않습니다(다운로드가 막히는 환경에서도 화면이 멈추지 않습니다).
 
 <br>
 
@@ -81,8 +81,9 @@ finsight-ai/
 ├── app_v2.py                       # 웹 앱 v2 — 중앙 집중형 UI
 ├── app.py                          # 웹 앱 v1 — 사이드바 UI
 ├── analyzer.py                     # 분석 엔진 — DART 호출 · 비율/DuPont/CCC · 리스크 · 원문 링크 · HTML 대시보드
+├── corp_codes_seed.json            # 상장사 목록 시드 (공개 데이터 · 최초 실행 시 다운로드 대신 사용)
 ├── tests/
-│   └── test_analyzer.py            # 계산 로직 단위 테스트 (pytest · 네트워크 불필요 · 33개 케이스)
+│   └── test_analyzer.py            # 계산 로직 단위 테스트 (pytest · 네트워크 불필요 · 39개 케이스)
 ├── requirements.txt                # streamlit>=1.32 · plotly>=5.18 · pandas>=2.0
 ├── .streamlit/
 │   ├── config.toml                 # 테마

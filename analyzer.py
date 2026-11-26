@@ -59,6 +59,12 @@ REPORT_ANNUAL = "11011"
 CORP_CACHE_FILE = "corp_codes.json"
 CORP_CACHE_DAYS = 7  # 캐시 유효기간(일). 지나면 자동으로 다시 받는다.
 
+# 저장소에 동봉한 기업 목록 시드 (corpCode.xml에서 뽑은 공개 데이터 — 상장사 이름·고유번호·종목코드만)
+# 첫 실행이나 다운로드 실패 시 바로 쓴다. (Streamlit Cloud처럼 밖으로 나가는 요청이 느리거나 막히는 환경)
+CORP_SEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corp_codes_seed.json")
+CORP_DOWNLOAD_TIMEOUT = 45   # corpCode.xml 전용 시간 제한(초) — 3.6MB 파일은 기본 30초로는 빠듯하다
+CORP_DOWNLOAD_RETRIES = 2    # 네트워크 실패 시 재시도 횟수(※ 키 오류는 재시도하지 않음)
+
 # API 응답을 기다리는 최대 시간(초)
 HTTP_TIMEOUT = 30
 
@@ -67,7 +73,7 @@ HTTP_TIMEOUT = 30
 # 1. OpenDART API 호출 도우미
 # ---------------------------------------------------------------------------
 
-def http_get(url, params):
+def http_get(url, params, timeout=HTTP_TIMEOUT):
     """URL에 파라미터를 붙여 GET 요청을 보내고 바이트(bytes)를 돌려준다."""
     query = urllib.parse.urlencode(params)
     full_url = url + "?" + query
@@ -75,7 +81,7 @@ def http_get(url, params):
         full_url,
         headers={"User-Agent": "Mozilla/5.0 (dart-analyzer; educational project)"},
     )
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
 
 
@@ -133,66 +139,160 @@ class DartError(Exception):
 # 2. 기업 고유번호(corp_code) 찾기 — corpCode.xml 다운로드 + 로컬 캐시
 # ---------------------------------------------------------------------------
 
+def _read_corp_json(path):
+    """캐시/시드 JSON을 읽는다. 파일이 없거나 깨졌으면 None."""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            data = json.load(fp)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if data.get("companies") else None
+
+
+def _corp_age_days(data):
+    """캐시를 받은 지 며칠 지났는지. saved_at이 없거나 깨졌으면 None."""
+    try:
+        return (datetime.now() - datetime.fromisoformat(data["saved_at"])).total_seconds() / 86400
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def seed_corp_cache(target=None):
+    """
+    저장소 시드(corp_codes_seed.json)를 캐시 파일로 복사한다. 이미 있으면 그대로 둔다.
+
+    Streamlit Cloud처럼 기업 목록(3.6MB)을 처음 받는 게 느리거나 막히는 환경에서
+    첫 화면이 멈추지 않도록 앱이 시작할 때 한 번 불러 준다.
+    """
+    target = target or CORP_CACHE_FILE
+    if os.path.exists(target):
+        return False
+    seed = _read_corp_json(CORP_SEED_FILE)
+    if not seed:
+        return False
+    try:
+        directory = os.path.dirname(os.path.abspath(target))
+        if directory and not os.path.isdir(directory):
+            os.makedirs(directory, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as fp:
+            json.dump(seed, fp, ensure_ascii=False)
+    except OSError:
+        return False
+    return True
+
+
+def _download_corp_codes(api_key, verbose=True):
+    """
+    corpCode.xml(ZIP)을 받아 상장사 목록만 뽑는다.
+
+    · 3.6MB 파일이라 기본 30초로는 빠듯하다 → CORP_DOWNLOAD_TIMEOUT(45초)로 넉넉히
+    · 네트워크 오류는 CORP_DOWNLOAD_RETRIES회까지 재시도 (키 오류는 즉시 중단)
+    """
+    last_error = None
+    for attempt in range(1, CORP_DOWNLOAD_RETRIES + 1):
+        try:
+            blob = http_get(API_BASE + "/corpCode.xml", {"crtfc_key": api_key},
+                            timeout=CORP_DOWNLOAD_TIMEOUT)
+        except (urllib.error.URLError, OSError) as error:      # 시간 초과·연결 실패
+            last_error = error
+            if verbose:
+                print("  · corpCode.xml 다운로드 실패 (%d/%d회): %s"
+                      % (attempt, CORP_DOWNLOAD_RETRIES, error))
+            if attempt < CORP_DOWNLOAD_RETRIES:
+                time.sleep(2)
+            continue
+
+        if not blob.startswith(b"PK"):
+            # ZIP이 아니면 오류 XML이 온 것 → 키 문제일 가능성이 높다.
+            raise DartError(
+                "corpCode.xml을 받지 못했습니다. 인증키를 확인해 주세요. (응답 앞부분: %s)"
+                % blob[:200].decode("utf-8", "ignore")
+            )
+
+        with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+            xml_name = archive.namelist()[0]
+            xml_bytes = archive.read(xml_name)
+
+        companies = []
+        root = ElementTree.fromstring(xml_bytes)
+        for node in root.findall("list"):
+            stock_code = (node.findtext("stock_code") or "").strip()
+            # 종목코드가 있는 회사 = 상장사만 저장한다.
+            # (전체 12만 개사 중 상장사는 약 4천 개사 → 캐시 파일이 10MB에서 0.4MB로 줄어든다)
+            if not stock_code:
+                continue
+            companies.append({
+                "corp_name": (node.findtext("corp_name") or "").strip(),
+                "corp_code": (node.findtext("corp_code") or "").strip(),
+                "stock_code": stock_code,
+            })
+        return companies
+
+    raise last_error if last_error else DartError("기업 목록을 받지 못했습니다.")
+
+
+def _save_corp_cache(companies):
+    """받아 온 목록을 캐시 파일로 저장한다. 읽기 전용 환경이면 조용히 넘어간다."""
+    try:
+        with open(CORP_CACHE_FILE, "w", encoding="utf-8") as fp:
+            json.dump(
+                {"saved_at": datetime.now().isoformat(timespec="seconds"), "companies": companies},
+                fp, ensure_ascii=False,
+            )
+        return True
+    except OSError:
+        return False
+
+
 def sync_corp_codes(api_key, refresh=False, verbose=True):
     """
     전체 기업 고유번호 목록을 확보해서 리스트로 돌려준다.
 
-    1) 로컬 캐시(corp_codes.json)가 있고 7일 이내라면 그대로 사용 (빠름)
-    2) 아니면 corpCode.xml ZIP을 내려받아 압축을 풀고 XML을 파싱해 캐시로 저장
+    1) 캐시(corp_codes.json)가 7일 이내라면 그대로 사용 (빠름)
+    2) 캐시가 없으면 저장소 시드(corp_codes_seed.json)를 즉시 사용 — 다운로드 대기 없음
+    3) refresh를 줬거나 시드도 없을 때만 corpCode.xml을 내려받는다 (45초 × 2회)
+    4) 다운로드가 실패해도 캐시 → 시드 순으로 물러나 분석은 계속된다
 
     반환값: [{"corp_name": "삼성전자", "corp_code": "00126380", "stock_code": "005930"}, ...]
     """
-    # --- (1) 캐시 확인 -----------------------------------------------------
-    if not refresh and os.path.exists(CORP_CACHE_FILE):
-        try:
-            with open(CORP_CACHE_FILE, "r", encoding="utf-8") as fp:
-                cache = json.load(fp)
-            saved_at = datetime.fromisoformat(cache["saved_at"])
-            age_days = (datetime.now() - saved_at).total_seconds() / 86400
-            if age_days < CORP_CACHE_DAYS and cache.get("companies"):
-                if verbose:
-                    print("  · 기업 목록 캐시 사용 (%s, %d개사)" % (cache["saved_at"][:10], len(cache["companies"])))
-                return cache["companies"]
-        except (ValueError, KeyError, json.JSONDecodeError):
-            pass  # 캐시가 깨졌으면 무시하고 새로 받는다.
+    # --- (1) 캐시 -----------------------------------------------------------
+    cache = _read_corp_json(CORP_CACHE_FILE)
+    if not refresh and cache:
+        age_days = _corp_age_days(cache)
+        if age_days is not None and age_days < CORP_CACHE_DAYS:
+            if verbose:
+                print("  · 기업 목록 캐시 사용 (%s, %d개사)"
+                      % (cache.get("saved_at", "")[:10], len(cache["companies"])))
+            return cache["companies"]
 
-    # --- (2) 새로 내려받기 -------------------------------------------------
+    # --- (2) 저장소 시드 — 첫 실행에서 3.6MB 다운로드를 기다리지 않는다 -----
+    seed = _read_corp_json(CORP_SEED_FILE)
+    if not refresh and seed:
+        if verbose:
+            print("  · 저장소 시드 사용 (%d개사)" % len(seed["companies"]))
+        return seed["companies"]
+
+    # --- (3) 새로 내려받기 --------------------------------------------------
     if verbose:
-        print("  · corpCode.xml 내려받는 중... (약 3.6MB, 최초 1회만)")
-    blob = http_get(API_BASE + "/corpCode.xml", {"crtfc_key": api_key})
-
-    if not blob.startswith(b"PK"):
-        # ZIP이 아니면 오류 XML이 온 것 → 키 문제일 가능성이 높다.
+        print("  · corpCode.xml 내려받는 중... (약 3.6MB)")
+    try:
+        companies = _download_corp_codes(api_key, verbose=verbose)
+    except DartError:
+        raise                                  # 키 오류 등은 그대로 안내
+    except (urllib.error.URLError, OSError) as error:
+        fallback = cache or seed                # (4) 실패해도 분석은 계속된다
+        if fallback:
+            if verbose:
+                print("  · 다운로드 실패 → 저장된 목록 사용 (%d개사)" % len(fallback["companies"]))
+            return fallback["companies"]
         raise DartError(
-            "corpCode.xml을 받지 못했습니다. 인증키를 확인해 주세요. (응답 앞부분: %s)"
-            % blob[:200].decode("utf-8", "ignore")
+            "기업 목록(corpCode.xml)을 받지 못했습니다 — 네트워크를 확인하거나 잠시 후 다시 시도해 주세요. (%s)"
+            % error
         )
 
-    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
-        xml_name = archive.namelist()[0]
-        xml_bytes = archive.read(xml_name)
-
-    companies = []
-    root = ElementTree.fromstring(xml_bytes)
-    for node in root.findall("list"):
-        stock_code = (node.findtext("stock_code") or "").strip()
-        # 종목코드가 있는 회사 = 상장사만 저장한다.
-        # (전체 12만 개사 중 상장사는 약 4천 개사 → 캐시 파일이 10MB에서 0.4MB로 줄어든다)
-        if not stock_code:
-            continue
-        companies.append({
-            "corp_name": (node.findtext("corp_name") or "").strip(),
-            "corp_code": (node.findtext("corp_code") or "").strip(),
-            "stock_code": stock_code,
-        })
-
-    # --- (3) 캐시로 저장 ---------------------------------------------------
-    with open(CORP_CACHE_FILE, "w", encoding="utf-8") as fp:
-        json.dump(
-            {"saved_at": datetime.now().isoformat(timespec="seconds"), "companies": companies},
-            fp, ensure_ascii=False,
-        )
-    if verbose:
+    if _save_corp_cache(companies) and verbose:
         print("  · 상장사 %d개사 목록 저장 완료" % len(companies))
     return companies
 

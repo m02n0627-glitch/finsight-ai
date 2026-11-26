@@ -24,6 +24,7 @@ import contextlib
 import html as html_lib
 import io
 import os
+import shutil
 import sys
 import tempfile
 import urllib.error
@@ -44,6 +45,15 @@ import analyzer as fs  # noqa: E402  (FinSight 분석 엔진)
 # 기업 목록 캐시는 저장소 폴더가 아니라 임시 폴더에 둔다.
 # (Streamlit Cloud는 파일 시스템이 휘발성이고, corp_codes.json 은 .gitignore 대상이다)
 fs.CORP_CACHE_FILE = os.path.join(tempfile.gettempdir(), "finsight_corp_codes.json")
+
+# 첫 실행에는 저장소에 동봉한 기업 목록 시드(공개 데이터)를 먼저 캐시로 복사한다.
+# → corpCode.xml(3.6MB) 다운로드가 느리거나 막히는 환경(Streamlit Cloud 등)에서도 첫 화면이 멈추지 않는다.
+CORP_SEED_PATH = os.path.join(BASE_DIR, "corp_codes_seed.json")
+try:
+    if os.path.exists(CORP_SEED_PATH) and not os.path.exists(fs.CORP_CACHE_FILE):
+        shutil.copyfile(CORP_SEED_PATH, fs.CORP_CACHE_FILE)
+except OSError:
+    pass
 
 st.set_page_config(
     page_title="FinSight · 규칙 기반 기업 재무·리스크 분석",
