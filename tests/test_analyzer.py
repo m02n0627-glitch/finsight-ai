@@ -1221,3 +1221,29 @@ def test_disclosure_normal_titles_are_not_flagged(monkeypatch):
     ])
     assert result["status"] == "clear"
     assert result["matches"] == []
+
+
+# 자본잠식이지만 다른 지표가 멀쩡해 점수가 60점을 넘는 경우 — 등급은 위험으로 고정
+# (자본잠식 자체가 관리종목·상장폐지 사유라 '주의'로 보이면 안 된다)
+MILDLY_IMPAIRED = {
+    2022: {"revenue": 1400, "op_income": 110, "net_income": 90,
+           "assets": 1000, "current_assets": 600, "liabilities": 940,
+           "current_liab": 300, "equity": 60,
+           "interest_expense": 20, "op_cash_flow": 110, "retained_earnings": 200},
+    2023: {"revenue": 1500, "op_income": 120, "net_income": 100,
+           "assets": 1000, "current_assets": 600, "liabilities": 1020,
+           "current_liab": 300, "equity": -20,          # 소폭 자본잠식
+           "interest_expense": 20, "op_cash_flow": 120, "retained_earnings": 300},
+}
+
+
+def test_capital_impairment_forces_danger_grade_even_with_high_score():
+    years_data, years = make_years(MILDLY_IMPAIRED)
+    fs.compute_ratios(years_data, years)
+    company = {"name": "테스트", "years": years_data}
+
+    risk = fs.evaluate_risk(company, years)
+    assert risk["score"] >= 60          # 나머지 항목은 안전/주의
+    assert risk["grade"] == "danger"    # 그래도 자본잠식이면 위험
+    assert "자본잠식" in risk["comment"]
+    assert "점수와 무관하게 위험 등급" in risk["comment"]

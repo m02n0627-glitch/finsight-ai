@@ -1492,6 +1492,10 @@ def evaluate_risk(company, years):
     available_max = sum(item["max"] for item in items)
     score = round(earned / available_max * 100) if available_max else 0
     grade = "safe" if score >= 85 else ("caution" if score >= 60 else "danger")
+    if impaired["impaired"] and grade != "danger":
+        # 자본잠식은 그 자체로 상장 규정상 관리종목·상장폐지 사유다.
+        # 점수가 높게 나와도(예: 유동비율·현금흐름이 멀쩡한 경우) 위험 등급으로 고정한다.
+        grade = "danger"
 
     # --- 자동 한 줄 코멘트 ---
     dangers = [i for i in items if i["state"] == "danger"]
@@ -1515,6 +1519,8 @@ def evaluate_risk(company, years):
     }[grade]
     if impaired["impaired"]:
         headline = "자본잠식 상태입니다"       # 점수와 무관하게 상태를 먼저 알린다
+        if score >= 60:
+            phrases.append("자본잠식은 점수와 무관하게 위험 등급")
     comment = "%s %s · %d점 — %s" % (RISK_META[grade]["light"], headline, score, " / ".join(phrases))
 
     return {
