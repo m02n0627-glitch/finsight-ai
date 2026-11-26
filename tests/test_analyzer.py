@@ -16,6 +16,7 @@ analyzer.py 계산 함수 단위 테스트 (pytest)
 """
 
 import os
+import re
 import sys
 
 import pytest
@@ -24,6 +25,20 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import analyzer as fs  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_statement_links(monkeypatch):
+    """
+    테스트가 저장소에 동봉된 실제 시드(statement_links_seed.json)에 좌우되지 않게 격리한다.
+
+    시드 조회를 검증하는 테스트는 이 안에서 시드를 직접 채운다.
+    (실제 시드 파일 내용은 test_statement_links_seed_file_shipped 가 따로 확인한다)
+    """
+    monkeypatch.setattr(fs, "_STATEMENT_LINKS_SEED", {})
+    fs._STATEMENT_LINKS_CACHE.clear()
+    yield
+    fs._STATEMENT_LINKS_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +618,179 @@ def test_collect_company_attaches_statement_links(monkeypatch):
     assert set(company["statement_links"]) == {2024, 2025}
     assert company["statement_links"][2025]["income"] == "viewer://income/202600002025"
     assert company["years"][2024]["statement_links"]["balance"] == "viewer://balance/202600002024"
+
+
+# ---------------------------------------------------------------------------
+# 재무제표 직행 링크 시드 (statement_links_seed.json) — 해외 Streamlit Cloud 대비
+# ---------------------------------------------------------------------------
+# 시드에 있는 접수번호는 네트워크 없이(0ms) viewer.do 를 돌려주고,
+# 없는 접수번호만 main.do 를 실시간 조회해야 한다.
+SEED_RCEPT = "20240312000736"          # 시드에 들어 있는 예시 접수번호(삼성전자 2023)
+SEED_LINKS = {
+    "income": "https://dart.fss.or.kr/report/viewer.do?rcpNo=%s&dcmNo=9702846&eleId=21" % SEED_RCEPT,
+    "balance": "https://dart.fss.or.kr/report/viewer.do?rcpNo=%s&dcmNo=9702846&eleId=20" % SEED_RCEPT,
+    "cashflow": "https://dart.fss.or.kr/report/viewer.do?rcpNo=%s&dcmNo=9702846&eleId=22" % SEED_RCEPT,
+    "main": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=%s" % SEED_RCEPT,
+    "labels": {"income": "연결손익계산서", "balance": "연결재무상태표", "cashflow": "연결현금흐름표"},
+    "fallback": False,
+}
+
+
+def _seed(monkeypatch, links=None):
+    monkeypatch.setattr(fs, "_STATEMENT_LINKS_SEED", links if links is not None else {SEED_RCEPT: SEED_LINKS})
+    fs._STATEMENT_LINKS_CACHE.clear()
+
+
+def test_statement_links_seed_hit_needs_no_network(monkeypatch):
+    _seed(monkeypatch)
+    monkeypatch.setattr(fs, "_fetch_dart_html",
+                        lambda *a, **k: pytest.fail("시드에 있으면 main.do 를 조회하지 않아야 한다"))
+    links = fs.fetch_statement_links(SEED_RCEPT)
+    assert links["balance"] == SEED_LINKS["balance"]
+    assert links["income"] == SEED_LINKS["income"]
+    assert links["cashflow"] == SEED_LINKS["cashflow"]
+    assert links["labels"]["balance"] == "연결재무상태표"
+    assert links["fallback"] is False
+    assert links["source"] == "seed"
+    assert "/report/viewer.do?" in links["balance"]      # 표지(main.do)가 아니라 직행 링크
+
+
+def test_statement_links_seed_hit_is_cached_and_copy_is_safe(monkeypatch):
+    _seed(monkeypatch)
+    monkeypatch.setattr(fs, "_fetch_dart_html", lambda *a, **k: SAMPLE_MAIN_HTML)
+    first = fs.fetch_statement_links(SEED_RCEPT)
+    first["labels"]["income"] = "바뀜"                   # 반환값을 고쳐도
+    assert fs._STATEMENT_LINKS_SEED[SEED_RCEPT]["labels"]["income"] == "연결손익계산서"  # 시드는 그대로
+    second = fs.fetch_statement_links(SEED_RCEPT)
+    assert second["labels"]["income"] == "연결손익계산서"
+    assert second["source"] == "seed"
+
+
+def test_statement_links_seed_miss_falls_back_to_live_fetch(monkeypatch):
+    _seed(monkeypatch)
+    calls = {"count": 0}
+
+    def counting(url, timeout):
+        calls["count"] += 1
+        return SAMPLE_MAIN_HTML
+
+    monkeypatch.setattr(fs, "_fetch_dart_html", counting)
+    links = fs.fetch_statement_links(RCEPT)              # 시드에 없는 접수번호
+    assert calls["count"] == 1
+    assert links["source"] == "live"
+    assert "eleId=20" in links["balance"]
+
+
+def test_statement_links_seed_entry_without_viewer_links_is_ignored(monkeypatch):
+    # main.do 만 들어 있는 시드 항목은 시드로 치지 않고 실시간 조회를 시도해야 한다.
+    main_only = dict(SEED_LINKS)
+    main_only.update({"income": SEED_LINKS["main"], "balance": SEED_LINKS["main"],
+                      "cashflow": SEED_LINKS["main"], "labels": {}})
+    _seed(monkeypatch, {SEED_RCEPT: main_only})
+    calls = {"count": 0}
+
+    def counting(url, timeout):
+        calls["count"] += 1
+        return SAMPLE_MAIN_HTML
+
+    monkeypatch.setattr(fs, "_fetch_dart_html", counting)
+    links = fs.fetch_statement_links(SEED_RCEPT)
+    assert calls["count"] == 1
+    assert links["source"] == "live"
+    assert "eleId=20" in links["balance"]
+
+
+def test_statement_links_seed_file_is_read(monkeypatch, tmp_path):
+    import json
+    path = tmp_path / "statement_links_seed.json"
+    path.write_text(json.dumps({"links": {SEED_RCEPT: SEED_LINKS}}, ensure_ascii=False),
+                    encoding="utf-8")
+    monkeypatch.setattr(fs, "STATEMENT_LINKS_SEED_FILE", str(path))
+    monkeypatch.setattr(fs, "_STATEMENT_LINKS_SEED", None)     # 다음 조회 때 파일을 읽게
+    assert fs.lookup_statement_links_seed(SEED_RCEPT)["balance"] == SEED_LINKS["balance"]
+    assert fs.lookup_statement_links_seed("00000000000000") is None
+
+
+def test_statement_links_seed_file_missing_or_broken_is_empty(monkeypatch, tmp_path):
+    broken = tmp_path / "broken.json"
+    broken.write_text("{ 망가진 JSON", encoding="utf-8")
+    for path in (str(tmp_path / "none.json"), str(broken), ""):
+        monkeypatch.setattr(fs, "STATEMENT_LINKS_SEED_FILE", path)
+        monkeypatch.setattr(fs, "_STATEMENT_LINKS_SEED", None)
+        assert fs.statement_links_seed() == {}
+        assert fs.lookup_statement_links_seed(SEED_RCEPT) is None
+
+
+def test_statement_links_seed_file_shipped(monkeypatch):
+    """저장소에 동봉되는 시드: 주요 상장사 3년치가 viewer.do 직행 링크로 들어 있고 API 키가 없다."""
+    import json
+    import os
+    monkeypatch.setattr(fs, "_STATEMENT_LINKS_SEED", None)
+    path = fs.STATEMENT_LINKS_SEED_FILE
+    assert os.path.exists(path), "statement_links_seed.json 이 저장소에 있어야 한다"
+    data = json.load(open(path, encoding="utf-8"))
+    assert len(data["companies"]) >= 30
+    assert len(data["links"]) >= 90                        # 30개사 × 3년
+    by_name = {c["corp_name"]: c for c in data["companies"]}
+    for name in ("삼성전자", "SK하이닉스"):
+        rcepts = by_name[name]["years"]
+        assert set(rcepts) == {"2023", "2024", "2025"}
+        assert all(rcepts[year] for year in rcepts)
+        links = fs.lookup_statement_links_seed(rcepts["2023"])
+        assert links is not None and links["source"] == "seed"
+        for kind in ("income", "balance", "cashflow"):
+            assert "/report/viewer.do?" in links[kind]
+            assert "rcpNo=" + rcepts["2023"] in links[kind]
+    text = open(path, encoding="utf-8").read()
+    assert "crtfc" not in text                        # 인증키 파라미터 이름조차 없어야 한다
+    assert not re.search(r"[0-9a-f]{40}", text)       # OpenDART 키(40자리) 같은 비밀값 없음
+
+
+# ---------------------------------------------------------------------------
+# DART 웹 요청 헤더·재시도 — 해외 리전에서 표지로 튕기는 문제 대비
+# ---------------------------------------------------------------------------
+
+def test_fetch_dart_html_sends_browser_headers_and_retries_on_timeout(monkeypatch):
+    import socket
+    requests = []
+
+    class FakeResponse:
+        def read(self):
+            return SAMPLE_MAIN_HTML.encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        requests.append((request, timeout))
+        if len(requests) == 1:
+            raise socket.timeout("timed out")          # 첫 시도는 타임아웃
+        return FakeResponse()
+
+    monkeypatch.setattr(fs.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fs.time, "sleep", lambda seconds: None)
+
+    html = fs._fetch_dart_html("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + RCEPT, 7)
+    assert "연결 재무상태표" in html
+    assert len(requests) == 2                          # 타임아웃 → 1회 재시도
+    assert requests[0][1] == 7                         # timeout 은 호출한 쪽 값을 쓴다
+    headers = {key.lower(): value for key, value in requests[-1][0].header_items()}
+    assert headers["user-agent"].startswith("Mozilla/5.0")
+    assert headers["user-agent"].endswith("Safari/537.36")
+    assert headers["accept"].startswith("text/html")
+    assert headers["accept-language"] == "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+    assert headers["referer"] == "https://dart.fss.or.kr/"
+
+    # 헤더로도 두 번 다 실패하면 예외로 알리고, 그 실패는 main.do fallback 으로 처리된다.
+    def always_timeout(request, timeout=None):
+        raise socket.timeout("timed out")
+
+    monkeypatch.setattr(fs.urllib.request, "urlopen", always_timeout)
+    with pytest.raises(OSError):
+        fs._fetch_dart_html("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + RCEPT, 1)
 
 
 # ---------------------------------------------------------------------------

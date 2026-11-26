@@ -658,6 +658,30 @@ DART_VIEWER_DOC = (
 STATEMENT_LINKS_TIMEOUT = 15          # main.do HTML 조회 제한 시간(초)
 _STATEMENT_LINKS_CACHE = {}           # rcept_no → statement_links (한 실행 안에서 재사용)
 
+# 저장소에 동봉한 '재무제표 직행 링크' 시드 (주요 상장사 2023~2025 사업보고서)
+# Streamlit Cloud(미국 리전)에서는 dart.fss.or.kr main.do 조회가 느리거나 막혀
+# viewer.do 대신 main.do(표지)로 물러나는 일이 있다. 그래서 주요 기업의 결과를
+# 미리 계산해 두고, 시드에 있는 접수번호는 네트워크 없이(0ms) 바로 돌려준다.
+#   · 시드에 없는 접수번호만 main.do 를 실시간 조회한다(실패 시 main.do fallback).
+#   · 시드에는 API 키가 들어가지 않는다(접수번호·링크·목차 이름만).
+STATEMENT_LINKS_SEED_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "statement_links_seed.json"
+)
+_STATEMENT_LINKS_SEED = None          # rcept_no → statement_links (파일에서 한 번만 읽는다)
+
+# DART 웹 화면 요청용 브라우저 헤더 — 일반 파이썬 UA로 요청하면 표지로 튕기는 경우가 있다.
+DART_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://dart.fss.or.kr/",
+}
+DART_HTML_RETRIES = 2                 # 타임아웃·연결 실패 시 1회 재시도(총 2회 시도)
+DART_HTML_RETRY_WAIT = 1.0            # 재시도 전 대기(초)
+
 # 계정 표의 숫자를 어느 재무제표 원문으로 보낼지 (UI가 쓴다)
 STATEMENT_KIND_LABEL = {"income": "손익계산서", "balance": "재무상태표", "cashflow": "현금흐름표"}
 
@@ -715,14 +739,26 @@ def rcept_date(rcept_no):
 #
 # 네트워크·형식이 예상과 다르면 조용히 main.do(보고서 첫 화면)로 물러난다.
 
-def _fetch_dart_html(url, timeout):
-    """DART 화면(HTML)을 그대로 받아 문자열로 돌려준다."""
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Mozilla/5.0 (dart-analyzer; educational project)"},
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", "replace")
+def _fetch_dart_html(url, timeout, attempts=DART_HTML_RETRIES):
+    """
+    DART 화면(HTML)을 그대로 받아 문자열로 돌려준다.
+
+    · 실제 브라우저와 같은 User-Agent·Accept·Accept-Language(ko-KR)·Referer 를 붙인다.
+      (해외 서버에서 표준 파이썬 UA로 요청하면 main.do 가 목차 없이 돌아오는 경우가 있다)
+    · 타임아웃·연결 실패는 한 번 더 시도한다. 두 번 다 실패하면 마지막 오류를 올린다.
+      (호출한 쪽이 main.do fallback 으로 처리하므로 분석은 계속된다)
+    """
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        request = urllib.request.Request(url, headers=DART_BROWSER_HEADERS)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read().decode("utf-8", "replace")
+        except (urllib.error.URLError, OSError) as error:      # 시간 초과·연결 실패
+            last_error = error
+            if attempt < attempts:
+                time.sleep(DART_HTML_RETRY_WAIT)
+    raise last_error if last_error else RuntimeError("DART 응답을 받지 못했습니다.")
 
 
 def parse_toc_nodes(html):
@@ -781,6 +817,57 @@ def _copy_statement_links(links):
     return copied
 
 
+def _read_statement_links_seed(path):
+    """시드 JSON을 읽어 {rcept_no: links} 로 돌려준다. 파일이 없거나 깨졌으면 빈 dict."""
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            data = json.load(fp)
+    except (OSError, ValueError):
+        return {}
+    links = data.get("links") if isinstance(data, dict) else None
+    return links if isinstance(links, dict) else {}
+
+
+def statement_links_seed():
+    """저장소 시드(statement_links_seed.json)를 한 번만 읽어 캐시한다(테스트는 이 값을 바로 바꿔도 된다)."""
+    global _STATEMENT_LINKS_SEED
+    if _STATEMENT_LINKS_SEED is None:
+        _STATEMENT_LINKS_SEED = _read_statement_links_seed(STATEMENT_LINKS_SEED_FILE)
+    return _STATEMENT_LINKS_SEED
+
+
+def lookup_statement_links_seed(rcept_no):
+    """
+    시드에서 접수번호 하나의 직행 링크를 찾는다. 없으면 None.
+
+    시드 항목이 조금 부족해도(예: cashflow 없음) 있는 값만 채우고 나머지는 main.do 로 둔다.
+    """
+    rcept_no = (rcept_no or "").strip()
+    if not rcept_no:
+        return None
+    entry = statement_links_seed().get(rcept_no)
+    if not isinstance(entry, dict):
+        return None
+    main_url = DART_MAIN_DOC % rcept_no
+    seeded = _empty_statement_links(main_url)
+    for kind, _names in STATEMENT_NAME_PRIORITY:
+        url = (entry.get(kind) or "").strip()
+        if url:
+            seeded[kind] = url
+            seeded["labels"][kind] = ((entry.get("labels") or {}).get(kind) or "").strip()
+    # 시드에 직행 링크가 하나도 없으면 시드로 취급하지 않고 실시간 조회로 넘긴다.
+    if all(seeded[kind] == main_url for kind, _names in STATEMENT_NAME_PRIORITY):
+        return None
+    seeded["main"] = (entry.get("main") or main_url).strip() or main_url
+    seeded["fallback"] = any(
+        not seeded["labels"][kind] or seeded[kind] == main_url for kind, _names in STATEMENT_NAME_PRIORITY
+    )
+    seeded["source"] = "seed"
+    return seeded
+
+
 def _empty_statement_links(main_url):
     return {
         "income": main_url,
@@ -803,6 +890,10 @@ def fetch_statement_links(rcept_no, timeout=STATEMENT_LINKS_TIMEOUT, use_cache=T
       · cashflow : 연결현금흐름표 → 현금흐름표
       · 한 장짜리 목차를 못 찾으면 '연결재무제표' 목차 → 그래도 없으면 main.do 첫 화면.
       · 조회 실패·형식 변경도 예외 없이 main.do 로 물러난다(분석은 계속된다).
+
+    조회 순서: (1) 실행 중 캐시 → (2) 저장소 시드(statement_links_seed.json) →
+    (3) 시드에 없을 때만 main.do 실시간 조회. 반환값의 "source" 로 어느 경로였는지 알 수 있다
+    ("seed" / "live" / "fallback").
     """
     rcept_no = (rcept_no or "").strip()
     main_url = DART_MAIN_DOC % rcept_no if rcept_no else ""
@@ -813,6 +904,13 @@ def fetch_statement_links(rcept_no, timeout=STATEMENT_LINKS_TIMEOUT, use_cache=T
         if cached is not None:
             return _copy_statement_links(cached)
 
+    # (2) 저장소 시드에 있으면 네트워크 없이 즉시 반환 — 해외 리전에서도 viewer.do 직행
+    seeded = lookup_statement_links_seed(rcept_no)
+    if seeded is not None:
+        _STATEMENT_LINKS_CACHE[rcept_no] = _copy_statement_links(seeded)
+        return seeded
+
+    # (3) 시드에 없는 접수번호만 main.do 를 실시간 조회(실패 시 main.do fallback)
     links = _empty_statement_links(main_url)
     try:
         html = _fetch_dart_html(main_url, timeout)
@@ -844,9 +942,10 @@ def fetch_statement_links(rcept_no, timeout=STATEMENT_LINKS_TIMEOUT, use_cache=T
                         links["labels"][kind] = STATEMENT_SECTION_FALLBACK
 
         links["fallback"] = any(not links["labels"][kind] for kind, _names in STATEMENT_NAME_PRIORITY)
+        links["source"] = "live"
     except Exception:
         # 조용히 main.do 로 물러난다. (원문 링크는 편의 기능이라 분석을 막지 않는다)
-        pass
+        links["source"] = "fallback"
 
     _STATEMENT_LINKS_CACHE[rcept_no] = _copy_statement_links(links)
     return links
