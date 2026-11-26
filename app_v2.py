@@ -1905,7 +1905,13 @@ def render_tab4(analysis):
         picked = st.selectbox("시뮬레이션할 기업", names, key="fs2_fpa_company")
         company = companies[names.index(picked)]
 
-    render_fpa_simulator(company, latest)
+    # 보조 기능 하나가 실패해도 다른 탭의 분석 결과를 가리지 않게 감싼다.
+    # (엔진을 빠뜨린 옛 모듈이 물려 있는 배포에서는 여기서 안내만 남기고 나머지는 그대로 그린다)
+    try:
+        render_fpa_simulator(company, latest)
+    except Exception as error:
+        st.info("FP&A 시나리오 시뮬레이터를 그리지 못했습니다. 다른 탭의 분석 결과는 그대로입니다.")
+        st.caption("%s: %s — 앱을 다시 배포(reboot)하면 해결되는 경우가 많습니다." % (type(error).__name__, error))
 
 
 # ---------------------------------------------------------------------------

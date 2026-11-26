@@ -436,3 +436,23 @@ def test_app_v2_fpa_simulator_survives_missing_industry_and_single_year(monkeypa
     at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
     assert not at.exception
     assert "시나리오 비교" in _texts(at)
+
+
+def test_app_v2_simulator_failure_does_not_break_other_tabs(monkeypatch):
+    """시뮬레이터가 어떤 이유로 실패해도 ①~③ 탭 결과는 그대로 그려진다."""
+    analysis = ccc_analysis()
+    monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    monkeypatch.setenv("DART_API_KEY", "i" * 40)
+
+    # 옛 모듈이 물려 있는 배포를 흉내 낸다(fs에 시뮬레이터 함수가 없다).
+    monkeypatch.delattr(fs, "fpa_baseline")
+
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+
+    assert not at.exception                              # 앱 전체가 죽지 않는다
+    text = _texts(at)
+    assert "앱을 다시 배포(reboot)" in text                # 실패 안내(정보 박스는 _texts 밖)
+    assert "AttributeError" in text
+    assert "삼성전자" in text                             # 다른 탭의 결과는 남아 있다
+    assert "동종업계 비교" in text or "핵심 재무제표" in text or "매출액" in text
