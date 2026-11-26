@@ -65,8 +65,9 @@ CORP_SEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corp_
 CORP_DOWNLOAD_TIMEOUT = 45   # corpCode.xml 전용 시간 제한(초) — 3.6MB 파일은 기본 30초로는 빠듯하다
 CORP_DOWNLOAD_RETRIES = 2    # 네트워크 실패 시 재시도 횟수(※ 키 오류는 재시도하지 않음)
 
-# API 응답을 기다리는 최대 시간(초)
-HTTP_TIMEOUT = 30
+# API 응답을 기다리는 최대 시간(초) · 해외 리전(Streamlit Cloud 등)에서도 끊기지 않게 넉넉히
+HTTP_TIMEOUT = 45
+HTTP_RETRIES = 2      # 네트워크 오류일 때만 1회 재시도 (API 호출 한도는 실패한 요청을 세지 않는다)
 
 
 # ---------------------------------------------------------------------------
@@ -85,14 +86,27 @@ def http_get(url, params, timeout=HTTP_TIMEOUT):
         return response.read()
 
 
-def call_json(endpoint, params):
+def call_json(endpoint, params, attempts=HTTP_RETRIES):
     """
     JSON을 돌려주는 OpenDART API를 호출한다.
 
     OpenDART는 오류일 때도 HTTP 200으로 응답하고 JSON 안의 "status" 값으로 알려주므로
     status가 "000"(정상)인지 반드시 확인해야 한다.
+    네트워크가 잠깐 느릴 때(특히 해외 리전)는 한 번 더 시도한다 — 응답을 못 받은 요청은
+    OpenDART 호출 한도에 잡히지 않으므로 재시도가 한도를 더 쓰지 않는다.
     """
-    raw = http_get(API_BASE + "/" + endpoint, params)
+    last_error = None
+    raw = None
+    for attempt in range(1, attempts + 1):
+        try:
+            raw = http_get(API_BASE + "/" + endpoint, params)
+            break
+        except (urllib.error.URLError, OSError) as error:      # 시간 초과·연결 실패
+            last_error = error
+            if attempt < attempts:
+                time.sleep(1.5)
+    if raw is None:
+        raise last_error if last_error else DartError("OpenDART 응답을 받지 못했습니다.")
     try:
         return json.loads(raw.decode("utf-8"))
     except json.JSONDecodeError:

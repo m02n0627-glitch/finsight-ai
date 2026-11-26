@@ -63,7 +63,7 @@ streamlit run app_v2.py     # v2 · 중앙 집중형 UI
 # CLI · HTML 대시보드
 python3 analyzer.py 삼성전자 SK하이닉스 --years 2023 2024 2025
 
-# 계산 로직 단위 테스트 (네트워크 불필요 · 39개 케이스)
+# 계산 로직 단위 테스트 (네트워크 불필요 · 41개 케이스)
 python3 -m pip install pytest
 python3 -m pytest tests/ -v
 ```
@@ -83,7 +83,7 @@ finsight-ai/
 ├── analyzer.py                     # 분석 엔진 — DART 호출 · 비율/DuPont/CCC · 리스크 · 원문 링크 · HTML 대시보드
 ├── corp_codes_seed.json            # 상장사 목록 시드 (공개 데이터 · 최초 실행 시 다운로드 대신 사용)
 ├── tests/
-│   └── test_analyzer.py            # 계산 로직 단위 테스트 (pytest · 네트워크 불필요 · 39개 케이스)
+│   └── test_analyzer.py            # 계산 로직 단위 테스트 (pytest · 네트워크 불필요 · 41개 케이스)
 ├── requirements.txt                # streamlit>=1.32 · plotly>=5.18 · pandas>=2.0
 ├── .streamlit/
 │   ├── config.toml                 # 테마

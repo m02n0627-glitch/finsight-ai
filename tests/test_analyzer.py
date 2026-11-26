@@ -695,3 +695,37 @@ def test_seed_corp_cache_copies_only_when_missing(monkeypatch, tmp_path):
     assert fs.seed_corp_cache(str(target)) is True
     assert target.exists()
     assert fs.seed_corp_cache(str(target)) is False          # 이미 있으면 그대로
+
+
+# ---------------------------------------------------------------------------
+# 네트워크 재시도 — 해외 리전에서 한 번 끊긴 호출이 분석 전체를 멈추지 않게
+# ---------------------------------------------------------------------------
+
+def test_call_json_retries_once_on_network_error(monkeypatch):
+    import json
+    import urllib.error
+    calls = {"count": 0}
+
+    def flaky(url, params, timeout=fs.HTTP_TIMEOUT):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise urllib.error.URLError("timed out")
+        return json.dumps({"status": "000", "list": [{"account_nm": "매출액"}]}).encode("utf-8")
+
+    monkeypatch.setattr(fs, "http_get", flaky)
+    monkeypatch.setattr(fs.time, "sleep", lambda seconds: None)
+    result = fs.call_json("fnlttSinglAcnt.json", {"crtfc_key": "x"})
+    assert result["status"] == "000"
+    assert calls["count"] == 2           # 첫 시도 실패 → 한 번 더
+
+
+def test_call_json_raises_after_retries(monkeypatch):
+    import urllib.error
+
+    def boom(url, params, timeout=fs.HTTP_TIMEOUT):
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(fs, "http_get", boom)
+    monkeypatch.setattr(fs.time, "sleep", lambda seconds: None)
+    with pytest.raises(urllib.error.URLError):
+        fs.call_json("fnlttSinglAcnt.json", {"crtfc_key": "x"})
