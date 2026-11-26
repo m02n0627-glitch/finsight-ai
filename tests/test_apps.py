@@ -335,3 +335,104 @@ def test_app_v1_renders_analysis_and_marks_capital_impairment(monkeypatch, patch
     text = _texts(at)
     assert "자본잠식" in text
     assert "삼성전자" in text
+
+
+# ---------------------------------------------------------------------------
+# 탭 ④ — FP&A 3개년 시나리오 시뮬레이터
+# ---------------------------------------------------------------------------
+
+def ccc_analysis():
+    """운전자본 지표(DSO·DIO·DPO·CCC)가 있는 1개사 분석 — 시뮬레이터 숫자까지 그려 본다."""
+    company = _company("삼성전자", "00126380", "005930", impaired=False)
+    company["years"][2024]["accounts"].update({
+        "cost_of_sales": {"amount": 7.0e11},
+        "receivables": {"amount": 2.0e11},
+        "inventory": {"amount": 1.0e11},
+        "payables": {"amount": 8.0e10},
+    })
+    fs.compute_working_capital(company["years"], [2023, 2024])
+    company["ccc_comment"] = fs.make_ccc_comment(company, [2023, 2024])
+    return {"companies": [company], "years": [2023, 2024], "dupont_gap": None,
+            "ccc_gap": None, "industry_peers": None}
+
+
+def _run_analysis_app(at):
+    at.run()
+    assert not at.exception
+    at.text_input(key="fs2_main_query").set_value("삼성")
+    at.run()
+    at.get_by_key("fs2_run").click()
+    at.run()
+    return at
+
+
+def test_app_v2_renders_fpa_scenario_tab_without_exception(monkeypatch, patched_engine):
+    """탭 ④·가정 슬라이더 3개·시나리오 표·한계 고지가 그려진다(CCC 미공시 기업)."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+
+    assert not at.exception
+    assert [tab.label for tab in at.tabs] == [
+        "① 핵심 재무 & 추이",
+        "② FP&A 심층 · DuPont & CCC",
+        "③ 리스크 상세 & DART 원문",
+        "④ FP&A 시나리오",
+    ]
+    assert [slider.label for slider in at.slider] == [
+        "매출 성장률 (연, %)", "영업이익률 변동 (%p)", "CCC 변동 (일)"]
+
+    text = _texts(at)
+    assert "FP&A 3개년 시나리오 시뮬레이터" in text
+    assert "시나리오 비교" in text
+    assert "내 시나리오" in text
+    assert "투자 권유가 아니" in text                          # 한계 고지
+    assert "CCC를 공시하지 않는 업종" in text                    # 금융업 등 폴백 안내
+    assert any("시뮬레이션 계산식 보기" in e.label for e in at.expander)
+
+    comparison = [d.value for d in at.dataframe if "시나리오" in list(d.value.columns)]
+    assert len(comparison) == 1
+    assert list(comparison[0]["시나리오"]) == ["보수적 (Bear)", "기준 (Base)", "낙관적 (Bull)", "내 시나리오"]
+    assert "Y+1 매출" in comparison[0].columns and "3년 누적 현금 영향" in comparison[0].columns
+
+
+def test_app_v2_fpa_simulator_recalculates_when_slider_moves(monkeypatch):
+    """슬라이더를 움직이면 내 시나리오 숫자가 다시 계산된다(실행 버튼 불필요)."""
+    analysis = ccc_analysis()
+    monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    monkeypatch.setenv("DART_API_KEY", "f" * 40)
+
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+    assert not at.exception
+
+    comparison = [d.value for d in at.dataframe if "시나리오" in list(d.value.columns)][0]
+    custom_row = comparison.iloc[3]
+    assert custom_row["시나리오"] == "내 시나리오"
+    assert custom_row["Y+3 매출"] == 10000                      # 1조원 = 10,000억 (가정 0%)
+    base_row = comparison.iloc[1]
+    assert base_row["Y+3 매출"] == 10000
+
+    # 매출 성장률 +20%로 움직이면 10,000 × 1.2³ = 17,280억
+    at.slider(key="fs2_fpa_growth_00126380").set_value(20.0)
+    at.run()
+    assert not at.exception
+
+    moved = [d.value for d in at.dataframe if "시나리오" in list(d.value.columns)][0]
+    assert moved.iloc[3]["Y+3 매출"] == 17280
+    assert moved.iloc[3]["가정"].startswith("성장 +20.0%")
+    # 상세 표에 Y+1~Y+3 행과 CCC가 그대로 있다
+    detail = [d.value for d in at.dataframe if "연도" in list(d.value.columns)][0]
+    assert list(detail["연도"]) == ["Y+1 · 2025년", "Y+2 · 2026년", "Y+3 · 2027년"]
+    assert detail["CCC(일)"].tolist() == [83, 83, 83]             # 73.0 + 52.1 − 41.7 ≈ 83.4일
+
+
+def test_app_v2_fpa_simulator_survives_missing_industry_and_single_year(monkeypatch):
+    """업종 비교가 없고 연도가 2개뿐인 결과에서도 탭 ④는 예외 없이 그려진다."""
+    analysis = ccc_analysis()
+    monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    monkeypatch.setenv("DART_API_KEY", "g" * 40)
+
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+    assert not at.exception
+    assert "시나리오 비교" in _texts(at)
