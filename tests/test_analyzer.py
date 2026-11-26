@@ -19,6 +19,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import urllib.error
 from io import BytesIO
 
@@ -1586,6 +1588,141 @@ def test_build_industry_comparison_never_raises(monkeypatch):
     result = fs.build_industry_comparison("key", {"companies": [target], "years": [2025]})
     assert result["status"] == "error"
     assert "예상 못 한 오류" in result["reason"]
+
+
+# ---------------------------------------------------------------------------
+# 4-5. 피어 병렬 조회 — ThreadPoolExecutor(max_workers=3)
+# ---------------------------------------------------------------------------
+
+# 3개 피어의 실제 모양과 가까운 계정(2025년 한 해). 영업이익률은 8.0% / 25.0% / 8.0%.
+PEER_ACCOUNTS = {
+    "00066000": {"revenue": 100000, "op_income": 8000, "net_income": 6000,
+                 "assets": 120000, "current_assets": 40000, "liabilities": 60000,
+                 "current_liab": 30000, "equity": 60000,
+                 "cost_of_sales": 70000, "receivables": 15000,
+                 "inventory": 20000, "payables": 12000},
+    "00164779": {"revenue": 80000, "op_income": 20000, "net_income": 18000,
+                 "assets": 140000, "current_assets": 70000, "liabilities": 50000,
+                 "current_liab": 25000, "equity": 90000,
+                 "cost_of_sales": 50000, "receivables": 18000,
+                 "inventory": 22000, "payables": 14000},
+    "00000003": {"revenue": 50000, "op_income": 4000, "net_income": 3000,
+                 "assets": 60000, "current_assets": 25000, "liabilities": 20000,
+                 "current_liab": 12000, "equity": 40000,
+                 "cost_of_sales": 38000, "receivables": 9000,
+                 "inventory": 8000, "payables": 6000},
+}
+
+# 피어 선정 순서(LG전자 → SK하이닉스 → 삼성전기)와 같은 순서로 기대한다.
+PEER_ORDER = ["LG전자", "SK하이닉스", "삼성전기"]
+
+
+def industry_analysis_for_parallel():
+    fs._INDUSTRY_SEED = PEER_SEED
+    target = peer_company("삼성전자", "00126380", "005930", SAMSUNG_ACCOUNTS)
+    return {"companies": [target], "years": [2025]}
+
+
+def instrumented_fetcher(delays=None, boom_codes=(), state=None):
+    """fetch_statement 대역 — 동시 실행 수를 재고, 회사별로 응답 시간을 다르게 만든다."""
+    delays = delays or {}
+    state = state if state is not None else {}
+    state.setdefault("active", 0)
+    state.setdefault("max", 0)
+    state.setdefault("calls", [])
+    lock = threading.Lock()
+    good = peer_statement_factory(PEER_ACCOUNTS)
+
+    def fake_fetch_statement(api_key, corp_code, year, fs_div_pref=("CFS", "OFS")):
+        with lock:
+            state["active"] += 1
+            state["max"] = max(state["max"], state["active"])
+            state["calls"].append(corp_code)
+        try:
+            time.sleep(delays.get(corp_code, 0))
+            if corp_code in boom_codes:
+                raise ValueError("예상 못 한 오류(%s)" % corp_code)
+            return good(api_key, corp_code, year)
+        finally:
+            with lock:
+                state["active"] -= 1
+
+    return fake_fetch_statement
+
+
+def test_build_industry_comparison_fetches_peers_in_parallel(monkeypatch):
+    """피어 3곳을 동시에 받는다 — 한 순간에 3개 요청, 전체 시간은 피어 1곳 수준."""
+    analysis = industry_analysis_for_parallel()
+    state = {}
+    fetch = instrumented_fetcher(delays={code: 0.2 for code in PEER_ACCOUNTS}, state=state)
+    monkeypatch.setattr(fs, "fetch_statement", fetch)
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+
+    started = time.monotonic()
+    result = fs.build_industry_comparison("key", analysis)
+    elapsed = time.monotonic() - started
+
+    assert result["status"] == "ok"
+    assert fs.PEER_FETCH_WORKERS == 3
+    assert state["max"] == 3                     # 3곳이 겹쳐서 조회되었다(순차면 1)
+    assert elapsed < 0.5                         # 순차 조회라면 0.6초 이상 걸린다
+    assert len(result["peers"]) == 3
+    assert sorted(state["calls"]) == sorted(PEER_ACCOUNTS)   # 각 피어는 한 번씩만
+
+
+def test_build_industry_comparison_keeps_selection_order(monkeypatch):
+    """가장 느린 피어가 첫 순서여도 표 순서는 '선정 순서' 그대로다(끝난 순서가 아니다)."""
+    analysis = industry_analysis_for_parallel()
+    fetch = instrumented_fetcher(delays={"00066000": 0.25, "00164779": 0.03, "00000003": 0.0})
+    monkeypatch.setattr(fs, "fetch_statement", fetch)
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+
+    result = fs.build_industry_comparison("key", analysis)
+
+    assert result["status"] == "ok"
+    assert [peer["name"] for peer in result["peers"]] == PEER_ORDER
+    rows = {row["key"]: row for row in result["rows"]}
+    assert rows["op_margin"]["mean"] == pytest.approx((8.0 + 25.0 + 8.0) / 3)
+
+
+def test_build_industry_comparison_isolates_unexpected_peer_error(monkeypatch):
+    """한 피어가 예상 못 한 예외(ValueError)를 내도 그 피어만 빠지고 나머지는 그대로 남는다."""
+    analysis = industry_analysis_for_parallel()
+    fetch = instrumented_fetcher(boom_codes=("00164779",), delays={"00164779": 0.05})
+    monkeypatch.setattr(fs, "fetch_statement", fetch)
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+
+    result = fs.build_industry_comparison("key", analysis)
+
+    assert result["status"] == "ok"                  # 본 비교는 살아 있다
+    assert [peer["name"] for peer in result["peers"]] == ["LG전자", "삼성전기"]
+    assert result["skipped"] == ["SK하이닉스"]
+    rows = {row["key"]: row for row in result["rows"]}
+    assert rows["op_margin"]["mean"] == pytest.approx(8.0)   # 남은 2곳으로만 평균
+
+
+def test_peer_metrics_many_keeps_order_and_marks_failures(monkeypatch):
+    """병렬 수집 함수 자체 — 입력 순서 유지, 실패는 None, 빈 목록은 그대로 빈 목록."""
+    def fake_peer_metrics(api_key, corp_code, year):
+        if corp_code == "fail":
+            raise ValueError("boom")
+        time.sleep({"slow": 0.15, "mid": 0.05}.get(corp_code, 0))
+        return {"op_margin": float(len(corp_code))}
+
+    monkeypatch.setattr(fs, "peer_metrics", fake_peer_metrics)
+    peers = [{"corp_code": "slow", "name": "가"},
+             {"corp_code": "fail", "name": "나"},
+             {"corp_code": "mid", "name": "다"}]
+
+    out = fs.peer_metrics_many("key", peers, 2025)
+    assert [peer["name"] for peer, _ in out] == ["가", "나", "다"]
+    assert [metrics for _, metrics in out] == [{"op_margin": 4.0}, None, {"op_margin": 3.0}]
+    assert fs.peer_metrics_many("key", [], 2025) == []
+
+    # 피어가 1곳이면 스레드를 만들지 않고 그대로 받는다.
+    single = fs.peer_metrics_many("key", [{"corp_code": "mid", "name": "다"}], 2025)
+    assert [peer["name"] for peer, _ in single] == ["다"]
+    assert single[0][1] == {"op_margin": 3.0}
 
 
 def test_build_analysis_attaches_peers_only_for_single_company(monkeypatch):

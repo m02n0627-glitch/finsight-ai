@@ -46,6 +46,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from xml.etree import ElementTree
 
@@ -1763,6 +1764,8 @@ def disclosure_coverage(disclosure):
 #      지주회사(64992)는 자회사 업종이 제각각이라 일반 기업 피어에서 빼고, 지주회사끼리만 비교한다.
 #   3) 비교 지표 : 영업이익률 · ROE · 부채비율 · 유동비율 · CCC (최신 기준 연도).
 #      피어 평균은 값이 있는 피어만으로 계산하고(없는 값은 분모에서 제외), 순위는 피어를 포함해 매긴다.
+#   4) 조회 방식 : 선정된 피어(최대 3곳)의 재무제표를 ThreadPoolExecutor(max_workers=3)로 동시에 받는다.
+#      표시 순서는 선정 순서 그대로이고, 한 피어가 실패해도 그 피어만 빠지고 나머지는 그대로 남는다.
 #
 # 네트워크·API가 실패해도 본 분석은 그대로 진행된다(동종업계 비교는 참고 정보이므로 예외를 밖으로 내보내지 않는다).
 
@@ -1771,6 +1774,7 @@ INDUSTRY_SEED_FILE = os.path.join(
 )
 INDUSTRY_HOLDING_CODE = "64992"     # KSIC 10차 '지주회사' — 업종이 섞이는 코드
 PEER_MAX = 3                        # 자동 선정하는 대표 피어 수
+PEER_FETCH_WORKERS = 3              # 피어 재무제표를 동시에 받는 스레드 수(피어 최대 3곳)
 PEER_MATCH_LABEL = {"same": "동일 코드", "three": "같은 3자리", "two": "같은 2자리"}
 
 # (키, 표 이름, 단위, 높을수록 좋은가, 소수 자리)
@@ -2018,6 +2022,43 @@ def peer_metrics(api_key, corp_code, year):
     return metrics
 
 
+def peer_metrics_many(api_key, peers, year, max_workers=PEER_FETCH_WORKERS):
+    """
+    피어 여러 곳의 그 해 지표를 ThreadPoolExecutor 로 동시에 받는다.
+
+    피어 한 곳당 OpenDART 호출이 2번(주요계정 + 전체 재무제표)이라 3곳을 차례로 받으면
+    네트워크가 느린 곳(해외 리전·DART 지연)에서 대기 시간이 그대로 3배가 된다.
+    최대 3개를 동시에 받아 체감 시간을 줄인다(피어는 최대 PEER_MAX=3곳).
+
+    반환: [(peer, metrics|None)] — **입력한 peers 순서 그대로**(선정 순서 유지).
+      · 한 피어의 예외는 그 피어만 None 으로 만들고 나머지 피어·본 분석은 그대로 둔다.
+      · 결과가 아직 캐시에 없는 피어만 네트워크로 나간다(peer_metrics 가 캐시를 먼저 본다).
+    """
+    peers = list(peers or [])
+    if not peers:
+        return []
+    workers = max(1, min(int(max_workers or 1), len(peers)))
+    if workers == 1:                       # 피어가 1곳이면 스레드를 만들지 않는다
+        results = []
+        for peer in peers:
+            try:
+                results.append((peer, peer_metrics(api_key, peer["corp_code"], year)))
+            except Exception:              # 한 피어의 실패가 나머지를 막지 않는다
+                results.append((peer, None))
+        return results
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="peer") as executor:
+        futures = [executor.submit(peer_metrics, api_key, peer["corp_code"], year) for peer in peers]
+        results = []
+        for peer, future in zip(peers, futures):   # zip 순서 = 제출 순서 = 선정 순서
+            try:
+                metrics = future.result()
+            except Exception:              # 한 피어의 실패가 나머지를 막지 않는다
+                metrics = None
+            results.append((peer, metrics))
+    return results
+
+
 def compare_peers(target_values, peers, metric_specs=PEER_METRICS):
     """
     대상 기업과 피어를 지표별로 견준다.
@@ -2162,8 +2203,7 @@ def build_industry_comparison(api_key, analysis, max_peers=PEER_MAX, verbose=Fal
             return base
 
         collected, skipped = [], []
-        for peer in selection["peers"]:
-            metrics = peer_metrics(api_key, peer["corp_code"], year)
+        for peer, metrics in peer_metrics_many(api_key, selection["peers"], year):
             if metrics is None:
                 skipped.append(peer["name"])
                 continue

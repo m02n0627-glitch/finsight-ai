@@ -881,18 +881,14 @@ def render_result_head(analysis):
     title = ' <span class="vs">vs</span> '.join(html_lib.escape(c["name"]) for c in companies)
     fs_names = sorted({c.get("fs_nm") or "-" for c in companies})
     meta = "%d–%d 사업보고서 · %s" % (years[0], years[-1], " / ".join(fs_names))
-    links = "".join(
-        '<a href="%s" target="_blank" rel="noopener noreferrer" title="%s 최신 사업보고서 원문">%s 원문 ↗</a>'
-        % (html_lib.escape(fs.dart_link(c.get("latest_rcept_no") or ""), quote=True),
-           html_lib.escape(c["name"]), html_lib.escape(c["name"]))
-        for c in companies if fs.dart_link(c.get("latest_rcept_no") or "")
-    )
 
+    # 원문 링크는 여기에 두지 않는다 — 바로 아래 기업 카드 헤더의 '{최신연도} 원문 ↗'
+    # (재무제표 직행 viewer.do) 하나로 모아, 같은 원문 링크가 두 번 뜨지 않게 한다.
     st.markdown(
         '<div class="fs-result-head">'
         '<div class="fs-result-title">%s</div>'
-        '<div class="fs-result-meta">%s%s</div>'
-        '</div>' % (title, meta, links),
+        '<div class="fs-result-meta">%s</div>'
+        '</div>' % (title, meta),
         unsafe_allow_html=True,
     )
 
@@ -944,14 +940,14 @@ def render_summary(analysis):
             risk_note = "자본잠식 · " + risk_note
         disclosure_note = d_sub if (company.get("disclosure") or {}).get("status") == "ok" else ""
 
-        links = statements_of(company, latest)
-        url = links.get("income") or links.get("main") or ""
+        # 카드 헤더의 원문 링크 한 개로 모았다(상단 헤더의 같은 링크는 제거).
+        # 손익계산서 직행(viewer.do) → 시드·라이브 실패 시 사업보고서 표지(main.do) 순서로 물러난다.
+        url, tip = statement_target(company, latest, "income")
         if url:
-            label = statement_label(links, "income")
             source = ('<a class="fs-mini-link" href="%s" target="_blank" rel="noopener noreferrer" '
                       'title="%s">%d 원문 ↗</a>'
                       % (html_lib.escape(url, quote=True),
-                         html_lib.escape("%d %s 원문 열기" % (latest, label), quote=True),
+                         html_lib.escape(tip, quote=True),
                          latest))
         else:
             source = ""
@@ -1069,11 +1065,6 @@ ACCOUNT_STATEMENT = {
 STATEMENT_FALLBACK_LABEL = {"income": "손익계산서", "balance": "재무상태표", "cashflow": "현금흐름표"}
 
 
-def statement_label(links, kind):
-    label = ((links or {}).get("labels") or {}).get(kind) or ""
-    return label or STATEMENT_FALLBACK_LABEL.get(kind, "재무제표")
-
-
 def statements_of(company, year):
     """그 해 DART 재무제표 원문 링크 묶음 (없으면 빈 dict)."""
     if not company:
@@ -1085,12 +1076,24 @@ def statements_of(company, year):
 
 
 def statement_target(company, year, key):
-    """계정 키 → (원문 URL, 툴팁). 링크를 만들 수 없으면 ('', '')."""
+    """계정 키 → (원문 URL, 툴팁). 링크를 만들 수 없으면 ('', '').
+
+    재무제표 한 장 직행(viewer.do)이 있으면 그 링크를, 없으면 사업보고서 표지(main.do)를 돌려준다.
+    표지로 물러난 경우에는 툴팁도 '사업보고서 원문'으로 맞춘다(손익계산서라고 적지 않는다).
+    """
     kind = ACCOUNT_STATEMENT.get(key, "income")
     links = statements_of(company, year)
     url = links.get(kind) or links.get("main") or ""
     if url:
-        return url, "%d %s 원문 열기" % (year, statement_label(links, kind))
+        found_label = ((links.get("labels") or {}).get(kind) or "").strip()
+        main_url = links.get("main") or ""
+        if found_label:
+            tip = "%d %s 원문 열기" % (year, found_label)
+        elif main_url and url == main_url:      # 시드·라이브 실패 → 표지(main.do)
+            tip = "%d 사업보고서 원문 열기" % year
+        else:
+            tip = "%d %s 원문 열기" % (year, STATEMENT_FALLBACK_LABEL.get(kind, "재무제표"))
+        return url, tip
     # 재무제표별 링크가 없으면(구버전 엔진·목차 파싱 실패) 사업보고서 첫 화면으로
     rcept_no = ((company.get("years") or {}).get(year) or {}).get("rcept_no") or ""
     url = fs.dart_link(rcept_no)
