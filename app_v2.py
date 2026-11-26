@@ -2155,11 +2155,20 @@ def fpa_scenario_cards(result):
 
 
 def fpa_alert_cell(scenario):
-    """비교표의 경보 칸 — 'Y+2 이자보상배율 0.8배'처럼 짧게."""
-    alert = scenario.get("alert")
-    if alert:
-        short = alert["text"].split(" — ")[0]
-        return short
+    """비교표의 경보 칸 — 좁은 열에 들어가도록 'Y+3 현금 고갈'처럼 짧게."""
+    parts = []
+    if scenario.get("first_icr_alert_step"):
+        icr = None
+        for row in scenario.get("years") or []:
+            if row.get("step") == scenario["first_icr_alert_step"]:
+                icr = row.get("interest_coverage")
+                break
+        parts.append("Y+%d 이자보상 %s" % (scenario["first_icr_alert_step"],
+                                           "-" if icr is None else ("%.1f배" % icr)))
+    if scenario.get("first_cash_alert_step"):
+        parts.append("Y+%d 현금 고갈" % scenario["first_cash_alert_step"])
+    if parts:
+        return " · ".join(parts)
     if scenario.get("interest_coverage_min") is None and scenario.get("end_cash") is None:
         return "판정 불가"
     return "-"
