@@ -636,6 +636,15 @@ ACCOUNT_STATEMENT = {
 }
 
 
+# 표에 보여 줄 재무제표 이름 — 링크에 실린 목차 이름, 없으면 기본 이름
+STATEMENT_FALLBACK_LABEL = {"income": "손익계산서", "balance": "재무상태표", "cashflow": "현금흐름표"}
+
+
+def statement_label(links, kind):
+    label = ((links or {}).get("labels") or {}).get(kind) or ""
+    return label or STATEMENT_FALLBACK_LABEL.get(kind, "재무제표")
+
+
 def statements_of(company, year):
     """그 해 DART 재무제표 원문 링크 묶음 (없으면 빈 dict)."""
     if not company:
@@ -651,11 +660,14 @@ def statement_target(company, year, key):
     kind = ACCOUNT_STATEMENT.get(key, "income")
     links = statements_of(company, year)
     url = links.get(kind) or links.get("main") or ""
-    if not url:
-        url = fs.dart_link(((company.get("years") or {}).get(year) or {}).get("rcept_no") or "")
+    if url:
+        return url, "%d %s 원문 열기" % (year, statement_label(links, kind))
+    # 재무제표별 링크가 없으면(구버전 엔진·목차 파싱 실패) 사업보고서 첫 화면으로
+    rcept_no = ((company.get("years") or {}).get(year) or {}).get("rcept_no") or ""
+    url = fs.dart_link(rcept_no)
     if not url:
         return "", ""
-    return url, "%d %s 원문 열기" % (year, fs.statement_link_label(links, kind))
+    return url, "%d 사업보고서 원문 열기" % year
 
 
 def statement_anchor(company, year, key, text):
@@ -712,7 +724,7 @@ def summary_source_links(company, year):
         url = links.get(kind) or links.get("main") or ""
         if not url:
             continue
-        label = fs.statement_link_label(links, kind)
+        label = statement_label(links, kind)
         parts.append('<a href="%s" target="_blank" rel="noopener noreferrer" title="%s">'
                      '📄 %d %s 원문 ↗</a>'
                      % (html_lib.escape(url, quote=True),
