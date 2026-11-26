@@ -777,6 +777,8 @@ APP_CSS = """
       height: 44px; padding: 0 16px; border-radius: 12px 12px 0 0;
       font-size: 13px; font-weight: 700; color: #6B7280; background: transparent;
   }
+  /* 탭 이름이 두 줄로 접히지 않게 — 폭이 모자라면 탭바 자체가 스크롤된다 */
+  .stTabs [data-baseweb="tab"] p { white-space: nowrap; }
   .stTabs [data-baseweb="tab"]:hover { color: #4338CA; background: #F5F3FF; }
   .stTabs [aria-selected="true"] { color: #4338CA !important; background: #EEF2FF !important; }
   .stTabs [data-baseweb="tab-highlight"] { background-color: #4F46E5; }
