@@ -25,3 +25,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# pytest 캐시
+.pytest_cache/

@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-FinSight AI v2 — 중앙 집중형 UI (OpenDART 사업보고서 기반 기업 재무·리스크 분석)
+FinSight v2 — 규칙 기반 기업 재무·리스크 분석 엔진 (중앙 집중형 UI)
 ================================================================================
 
 app.py(사이드바 버전)는 기록·비교용으로 그대로 두고, 화면만 새로 설계한 버전이다.
 분석 로직은 app.py와 똑같이 analyzer.py의 build_analysis() 등 기존 엔진 함수를 그대로 쓴다.
 
 화면 구성 (요청한 순서 그대로)
-    ① 상단 히어로 헤더 — FinSight AI 배지 + 한 줄 설명
+    ① 상단 히어로 헤더 — FinSight 배지 + 한 줄 설명 (규칙 기반 엔진임을 함께 표기)
     ② 가운데 입력 카드
          · 기업 이름 검색/선택
          · ＋ 경쟁사 비교 추가 (체크하면 바로 아래에 비교 기업 검색/선택이 나타남)
@@ -52,7 +52,7 @@ import analyzer as fs  # noqa: E402  (FinSight 분석 엔진)
 fs.CORP_CACHE_FILE = os.path.join(tempfile.gettempdir(), "finsight_corp_codes.json")
 
 st.set_page_config(
-    page_title="FinSight AI · 기업 재무·리스크 분석",
+    page_title="FinSight · 규칙 기반 기업 재무·리스크 분석",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed",          # 사이드바 없는 중앙 집중형 레이아웃
@@ -559,11 +559,13 @@ APP_CSS = """
 
 HERO_TMPL = """
 <div class="fs-hero">
-  <div class="fs-hero-badge">◆&nbsp; FINSIGHT AI &nbsp;·&nbsp; 기업 심층 분석</div>
+  <div class="fs-hero-badge">◆&nbsp; FINSIGHT &nbsp;·&nbsp; 규칙 기반 기업 재무·리스크 분석</div>
   <div class="fs-hero-title">재무제표와 공시를 읽어,<br>기업의 체력을 한 장으로 <span class="thin">정리합니다</span></div>
   <div class="fs-hero-sub">
     OpenDART 사업보고서를 그대로 불러와 5대 리스크 점수 · DuPont ROE · 현금전환주기(CCC) ·
-    최근 1년 공시 위험까지 한 화면에 담습니다. 기업을 고르고 분석 실행만 누르면 됩니다.
+    최근 1년 공시 위험까지 한 화면에 담습니다. 기업을 고르고 분석 실행만 누르면 됩니다.<br>
+    모든 수치 계산·DuPont·CCC·리스크 판정은 <b>결정론적 Python 규칙</b>으로 처리하며
+    LLM 추론이나 생성 모델에 의존하지 않습니다.
   </div>
 </div>
 """
@@ -948,8 +950,13 @@ def build_table(companies, years, rows, value_getter, digits=1):
 
 
 def show_table(df, digits=1, height=None):
+    # 값이 없는 칸이 'None'으로 보이지 않게 숫자형으로 맞춘다 → 화면에는 빈칸(－ 없음)으로 표시된다.
+    # (한 열이 전부 None이면 pandas가 object 열로 잡아 'None' 글자가 그대로 찍히던 문제)
+    df = df.apply(pd.to_numeric, errors="coerce")
+    # 천 단위 구분자: 억원 금액 2,589,355 / 비율 13.1 / 배수 1.30 모두 쉼표 형식으로 보여 준다.
+    number_format = "%,.0f" if digits == 0 else ("%,." + str(digits) + "f")
     config = {
-        column: st.column_config.NumberColumn(column, format=("%.0f" if digits == 0 else "%.1f"))
+        column: st.column_config.NumberColumn(column, format=number_format)
         for column in df.columns
     }
     if height:
@@ -958,7 +965,8 @@ def show_table(df, digits=1, height=None):
         st.dataframe(df, column_config=config)
 
 
-def table_financials(companies, years, rows):
+def table_financials(companies, years, rows, title="재무제표 (단위: 억원)"):
+    st.markdown("**%s**" % title)
     df = build_table(companies, years, rows,
                      lambda company, year, key: row_eok(account_amount(company, year, key)))
     show_table(df, digits=0)
@@ -1043,7 +1051,8 @@ def style_fig(fig, height=380, legend=True):
     fig.update_layout(
         template="plotly_white",
         height=height,
-        margin=dict(l=10, r=14, t=54, b=10),
+        # 범례를 차트 아래로 내리고 위·아래 여백을 넓혀 소제목("매출액 추이" 등)과 겹치지 않게 한다.
+        margin=dict(l=10, r=14, t=58, b=84),
         font=dict(family="Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif",
                   size=12, color="#334155"),
         hoverlabel=dict(bgcolor="white", font_size=12),
@@ -1051,10 +1060,12 @@ def style_fig(fig, height=380, legend=True):
         bargap=0.28,
     )
     if legend:
-        fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0,
+        fig.update_layout(legend=dict(orientation="h", yanchor="top", y=-0.22, x=0,
                                       font=dict(size=11), bgcolor="rgba(0,0,0,0)"))
     fig.update_xaxes(showgrid=False, linecolor="#E2E8F0")
-    fig.update_yaxes(gridcolor="#EEF2F6", zerolinecolor="#CBD5E1")
+    # 억원 단위 값이 '3.5M' 같은 축약 표기 대신 '3,500,000'으로 보이게 한다.
+    fig.update_yaxes(gridcolor="#EEF2F6", zerolinecolor="#CBD5E1",
+                     tickformat=",", exponentformat="none", separatethousands=True)
     return fig
 
 
@@ -1240,10 +1251,10 @@ def render_tab1(analysis):
     single = len(companies) == 1
 
     section_title("📋 핵심 재무제표", "매출·영업이익·순이익과 재무상태(자산·부채·자본)를 연도별로 봅니다.")
-    table_financials(companies, years, CORE_ROWS)
+    table_financials(companies, years, CORE_ROWS, title="핵심 재무제표 (단위: 억원)")
 
     with st.expander("추가 계정 보기 (운전자본·현금흐름·이자비용)"):
-        table_financials(companies, years, EXTRA_ROWS)
+        table_financials(companies, years, EXTRA_ROWS, title="추가 계정 (단위: 억원)")
         st.caption("CCC(운전자본)와 5대 리스크 진단에 쓰이는 계정입니다. 공시되지 않은 계정은 비어 있습니다.")
 
     section_title("📈 추이 차트", "막대·선을 눌러 값을 확인하세요. 범례를 클릭하면 계열을 켜고 끌 수 있습니다.")
@@ -1564,6 +1575,7 @@ def render_results(analysis):
             st.rerun()
     st.caption(
         "데이터: 금융감독원 전자공시시스템(DART) Open API · 엔진: analyzer.py · "
+        "모든 수치는 결정론적 Python 규칙으로 계산합니다(LLM 추론 미사용) · "
         "학습·포트폴리오 목적의 1차 스크리닝 도구이며 투자 권유가 아닙니다."
     )
 
