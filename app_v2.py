@@ -777,8 +777,10 @@ APP_CSS = """
       height: 44px; padding: 0 16px; border-radius: 12px 12px 0 0;
       font-size: 13px; font-weight: 700; color: #6B7280; background: transparent;
   }
-  /* 탭 이름이 두 줄로 접히지 않게 — 폭이 모자라면 탭바 자체가 스크롤된다 */
-  .stTabs [data-baseweb="tab"] p { white-space: nowrap; }
+  /* 탭 이름이 두 줄로 접히지 않게 — 최신 Streamlit은 button[data-baseweb="tab"] 대신
+     div[role="tab"](data-testid="stTab")으로 그린다. 둘 다 잡아 둔다. */
+  .stTabs [data-baseweb="tab"] p, .stTabs [role="tab"] p { white-space: nowrap; }
+  .stTabs [role="tab"] { min-width: max-content; }
   .stTabs [data-baseweb="tab"]:hover { color: #4338CA; background: #F5F3FF; }
   .stTabs [aria-selected="true"] { color: #4338CA !important; background: #EEF2FF !important; }
   .stTabs [data-baseweb="tab-highlight"] { background-color: #4F46E5; }
@@ -847,8 +849,8 @@ APP_CSS = """
       .fs-fintable th, .fs-fintable td { padding: 6px 8px; font-size: 12px; }
 
       /* 탭 4개가 최대한 한 줄에 보이도록 간격만 줄인다(남는 탭은 탭바 스크롤) */
-      .stTabs [data-baseweb="tab"] { padding: 0 10px; font-size: 12px; height: 40px; }
-      .stTabs [data-baseweb="tab-list"] { gap: 2px; }
+      .stTabs [data-baseweb="tab"], .stTabs [role="tab"] { padding: 0 8px; font-size: 12px; height: 40px; }
+      .stTabs [data-baseweb="tab-list"], .stTabs [role="tablist"] { gap: 2px; overflow-x: auto; }
   }
 </style>
 """
