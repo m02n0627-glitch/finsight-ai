@@ -1492,14 +1492,17 @@ def chart_fpa_scenarios(result):
         labels.append("" if values[-1] is None else format(round(values[-1]), ","))
         fig.add_trace(go.Scatter(
             x=xs, y=values, name=name, mode="lines+markers+text",
-            text=labels, textposition="top right",
+            # 마지막 점(Y+3) 값만 표시 — 오른쪽 여백까지 넘겨 잘리지 않게 cliponaxis=False
+            text=labels, textposition="middle right", textfont=dict(size=11),
+            cliponaxis=False,
             line=dict(color=colors.get(scenario["key"], "#4F46E5"), width=3,
                       dash="dash" if scenario.get("is_custom") else "solid"),
             marker=dict(size=8),
         ))
     fig.update_layout(title=dict(text="매출 경로 (억원)", x=0.01, font=dict(size=13)))
-    fig.update_yaxes(title_text="억원")
-    return style_fig(fig, height=380)
+    figure = style_fig(fig, height=380)
+    figure.update_layout(margin=dict(l=10, r=96, t=58, b=84))   # 오른쪽 값 라벨 자리
+    return figure
 
 
 # ---------------------------------------------------------------------------
