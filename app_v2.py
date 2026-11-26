@@ -336,6 +336,29 @@ APP_CSS = """
       font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
                    "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   }
+  /* ── Streamlit 머티리얼 아이콘 폰트는 Pretendard에서 제외 ─────────────
+     위 규칙의 [class*="css"]가 아이콘 span의 emotion 클래스까지 잡아
+     폰트를 덮어쓰면 'keyboard_arrow_right' 같은 아이콘 이름이 글자로 노출된다.
+     (expander 화살표·버튼 아이콘 등) 아이콘 요소만 아이콘 폰트로 되돌린다. */
+  [data-testid="stIconMaterial"],
+  [data-testid="stExpanderToggleIcon"],
+  [data-testid="stExpanderStepChevron"],
+  .material-symbols-rounded,
+  .material-symbols-outlined,
+  .material-icons {
+      font-family: "Material Symbols Rounded", "Material Icons" !important;
+      font-style: normal !important;
+      font-weight: 400 !important;
+      font-feature-settings: "liga" !important;
+      -webkit-font-feature-settings: "liga" !important;
+      letter-spacing: normal !important;
+      line-height: 1 !important;
+      text-transform: none !important;
+      white-space: nowrap !important;
+      word-wrap: normal !important;
+      direction: ltr !important;
+      -webkit-font-smoothing: antialiased !important;
+  }
   .stApp {
       background: #FFFFFF;
   }
@@ -370,8 +393,13 @@ APP_CSS = """
   .fs-hero-count { font-size: 11.5px; color: #6B7280; font-variant-numeric: tabular-nums; }
   .fs-hero-label { font-size: 12.5px; color: #9CA3AF; margin-bottom: 10px; }
   .fs-hero-title {
-      font-size: 34px; font-weight: 800; letter-spacing: -0.04em;
-      line-height: 1.24; color: #FFFFFF;
+      font-size: 34px; font-weight: 900; letter-spacing: -0.03em;
+      line-height: 1.18; color: #FFFFFF;
+      /* Pretendard Variable은 45~920 가변 폰트라 900(Black)까지 실제로 그려진다. */
+      font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+                   "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      font-variation-settings: "wght" 900;
+      text-rendering: optimizeLegibility;
   }
   .fs-hero-title .accent { color: #7C83FF; }
   .fs-hero-sub {
@@ -996,7 +1024,9 @@ def show_table(df, digits=1, height=None):
 
 
 def table_financials(companies, years, rows, title="재무제표 (단위: 억원)"):
-    st.markdown("**%s**" % title)
+    # title을 비우면(None) 제목 없이 표만 그린다 — 위에서 section_title()로 이미 제목을 낸 경우.
+    if title:
+        st.markdown("**%s**" % title)
     st.markdown(financial_table_html(companies, years, rows), unsafe_allow_html=True)
     st.caption("단위 억원 · 숫자를 클릭하면 그 해 DART 원문이 새 탭으로 열립니다")
 
@@ -1371,8 +1401,9 @@ def render_tab1(analysis):
     companies, years = analysis["companies"], analysis["years"]
     single = len(companies) == 1
 
+    # 제목은 여기서 한 번만 낸다. (표 함수에 같은 제목을 넘겨 두 줄로 겹치던 문제)
     section_title("핵심 재무제표")
-    table_financials(companies, years, CORE_ROWS, title="핵심 재무제표")
+    table_financials(companies, years, CORE_ROWS, title=None)
     st.plotly_chart(chart_income(companies, years))
     st.plotly_chart(chart_ratios(companies, years))
 
