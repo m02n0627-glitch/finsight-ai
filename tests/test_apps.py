@@ -12,6 +12,7 @@ app_v2.py · app.py Streamlit 렌더링 테스트 (AppTest)
 """
 
 import os
+import re
 import sys
 
 import pytest
@@ -171,6 +172,25 @@ def _texts(at):
     parts += [c.value for c in at.caption]
     parts += [w.value for w in at.warning]
     return "\n".join(str(p) for p in parts)
+
+
+def _markdown(at):
+    return "\n".join(str(m.value) for m in at.markdown)
+
+
+def _css(at):
+    for m in at.markdown:
+        text = str(m.value)
+        if "<style>" in text and ".fs-metric-val" in text:
+            return text
+    raise AssertionError("앱 CSS를 찾지 못했습니다")
+
+
+def _font_size(css, selector):
+    # 선택자가 묶여 있을 수 있다 (".fs-metric-cmp, .fs-peer-cmp { ... }")
+    found = re.search(re.escape(selector) + r"\s*(?:,[^{]*)?\{[^}]*font-size:\s*([\d.]+)px", css)
+    assert found, "%s 의 font-size 를 찾지 못했습니다" % selector
+    return float(found.group(1))
 
 
 # ---------------------------------------------------------------------------
@@ -456,3 +476,158 @@ def test_app_v2_simulator_failure_does_not_break_other_tabs(monkeypatch):
     assert "AttributeError" in text
     assert "삼성전자" in text                             # 다른 탭의 결과는 남아 있다
     assert "동종업계 비교" in text or "핵심 재무제표" in text or "매출액" in text
+
+
+# ---------------------------------------------------------------------------
+# 상태 라벨(양호·보통·부담) · 업종 평균 대비(높음/낮음 · 우위/열위)
+# ---------------------------------------------------------------------------
+
+def healthy_company():
+    """모든 주요 지표가 '양호' 구간에 들어오는 기업 — 라벨이 양호로 찍히는지 본다."""
+    company = _company("삼성전자", "00126380", "005930", impaired=False)
+    company["years"][2024]["accounts"].update({
+        "revenue": {"amount": 1.0e12}, "op_income": {"amount": 1.5e11},
+        "net_income": {"amount": 1.0e11}, "assets": {"amount": 1.6e12},
+        "liabilities": {"amount": 6.0e11}, "equity": {"amount": 1.0e12},
+        "current_assets": {"amount": 9.0e11}, "current_liab": {"amount": 6.0e11},
+        "cost_of_sales": {"amount": 7.0e11}, "receivables": {"amount": 6.0e10},
+        "inventory": {"amount": 2.0e10}, "payables": {"amount": 3.5e10},
+    })
+    years = [2023, 2024]
+    fs.compute_ratios(company["years"], years)
+    fs.compute_working_capital(company["years"], years)
+    company["risk"] = fs.evaluate_risk(company, years)
+    company["dupont_comment"] = fs.make_dupont_comment(company, 2024)
+    company["ccc_comment"] = fs.make_ccc_comment(company, years)
+    return company
+
+
+def healthy_peer_block():
+    """영업이익률 15% vs 피어 평균 8% · 부채비율 60% vs 140% · CCC 14일 vs 90일."""
+    target_values = {"op_margin": 15.0, "roe": 10.0, "debt_ratio": 60.0,
+                     "current_ratio": 150.0, "ccc": 14.0}
+    peers = [
+        {"corp_code": "00066000", "corp_name": "LG전자(주)", "name": "LG전자",
+         "stock_code": "066570", "induty_code": "264", "match": "same", "match_label": "동일 코드",
+         "metrics": {"op_margin": 6.0, "roe": 6.0, "debt_ratio": 160.0,
+                     "current_ratio": 110.0, "ccc": 110.0, "fs_nm": "연결재무제표"}},
+        {"corp_code": "00164779", "corp_name": "에스케이하이닉스(주)", "name": "에스케이하이닉스",
+         "stock_code": "000660", "induty_code": "2612", "match": "two", "match_label": "같은 2자리",
+         "metrics": {"op_margin": 10.0, "roe": 10.0, "debt_ratio": 120.0,
+                     "current_ratio": 150.0, "ccc": 70.0, "fs_nm": "연결재무제표"}},
+    ]
+    rows = fs.compare_peers(target_values, peers)
+    return {
+        "status": "ok", "name": "삼성전자", "year": 2024, "induty_code": "264",
+        "industry_name": "통신 및 방송장비 제조업", "sector": "반도체·전자",
+        "code_source": "seed", "levels": {"same": 1, "three": 0, "two": 1},
+        "excluded_holdings": 0, "fs_nm": "연결재무제표",
+        "target_values": target_values, "rows": rows, "peers": peers, "skipped": [],
+        "comment": fs.make_industry_comment(rows, "삼성전자", len(peers), 2024),
+    }
+
+
+def healthy_analysis():
+    return {"companies": [healthy_company()], "years": [2023, 2024], "dupont_gap": None,
+            "ccc_gap": None, "industry_peers": healthy_peer_block()}
+
+
+def test_app_v2_marks_good_metrics_with_muted_status_tag(monkeypatch):
+    """주요 지표 카드 — 큰 숫자 옆에 '양호' 라벨, 아래에 업종 평균 대비 한 줄이 작게 붙는다."""
+    analysis = healthy_analysis()
+    monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    monkeypatch.setenv("DART_API_KEY", "j" * 40)
+
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+    assert not at.exception
+
+    markdown = _markdown(at)
+    assert "주요 지표" in _texts(at)
+    assert '<span class="fs-tag good"' in markdown          # 양호 라벨
+    assert markdown.count('<span class="fs-tag good"') >= 5  # 5개 지표 모두 양호
+    assert "양호" in markdown
+    # 평균 대비 문구는 회색 보조 클래스로만 나온다(숫자와 같은 크기로 새지 않는다)
+    assert "평균 8.0% 대비 높음" in markdown
+    assert '<div class="fs-peer-cmp">평균 8.0% 대비 높음' in markdown
+
+
+def test_app_v2_average_comparison_respects_metric_direction(monkeypatch):
+    """부채비율·CCC는 '평균보다 낮음'이 우위 — 높음/낮음만 보고 판정하지 않는다."""
+    analysis = healthy_analysis()
+    monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    monkeypatch.setenv("DART_API_KEY", "k" * 40)
+
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+    assert not at.exception
+    markdown = _markdown(at)
+
+    # 높을수록 좋은 지표: 평균보다 높음 = 우위
+    assert '평균 8.0% 대비 높음 <span class="fs-peer-verdict good">우위</span>' in markdown
+    # 낮을수록 좋은 지표: 평균보다 낮음 = 우위 (여기서 방향을 틀리면 열위로 찍힌다)
+    assert '평균 140.0% 대비 낮음 <span class="fs-peer-verdict good">우위</span>' in markdown
+    assert '평균 90일 대비 낮음 <span class="fs-peer-verdict good">우위</span>' in markdown
+    assert 'fs-peer-verdict bad' not in markdown                # 이 기업은 모든 지표가 우위
+
+
+def test_app_v2_marks_burden_and_keeps_capital_impairment(monkeypatch, patched_engine):
+    """적자·과다부채 기업 — '부담' 라벨, 자본잠식은 '자본잠식 · 위험' 그대로."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+
+    assert not at.exception
+    markdown = _markdown(at)
+    assert '<span class="fs-tag bad"' in markdown
+    assert "부담" in markdown
+    assert "자본잠식 · 위험" in markdown                       # ROE·부채비율 카드
+    assert '평균 13.0% 대비 낮음 <span class="fs-peer-verdict bad">열위</span>' in markdown
+
+
+def test_app_v2_helper_text_is_smaller_than_main_numbers(monkeypatch, patched_engine):
+    """보조 문구·상태 라벨은 메인 숫자(21~23px)보다 항상 작고 회색 톤이다."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+    assert not at.exception
+
+    css = _css(at)
+    summary_value = _font_size(css, ".fs-metric-val")
+    kpi_value = _font_size(css, ".fs-kpi .val")
+    assert _font_size(css, ".fs-tag") < summary_value
+    assert _font_size(css, ".fs-metric-cmp") < summary_value
+    assert _font_size(css, ".fs-peer-cmp") < kpi_value
+    assert ".fs-tag.good { background: #EFF5F1; color: #5F7F6C; }" in css   # 채도 낮은 톤
+
+
+# ---------------------------------------------------------------------------
+# 접었다 펴는 용어·목차 설명란
+# ---------------------------------------------------------------------------
+
+def test_app_v2_tab2_glossary_expander_explains_terms_collapsed(monkeypatch, patched_engine):
+    """탭 ② 상단 — 기본 접힌 설명란이 FP&A·DuPont·CCC·동종업계를 짧게 풀어 준다."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+    assert not at.exception
+
+    matched = [e for e in at.expander if "이 화면의 용어" in e.label]
+    assert len(matched) == 1
+    assert matched[0].proto.expanded is False                     # 기본은 접힌 상태
+    body = "\n".join(str(m.value) for m in matched[0].markdown)
+    for word in ("FP&A", "DuPont ROE 3단계 분해", "순이익률", "총자산회전율",
+                 "재무레버리지", "DSO", "DIO", "DPO", "동종업계 비교", "우위"):
+        assert word in body
+    assert "화면 목차" in body
+
+
+def test_app_v2_tab4_scenario_glossary_is_collapsed(monkeypatch, patched_engine):
+    """탭 ④ — 시나리오 용어(Bear·Base·Bull·내 시나리오)도 접힌 설명란으로 있다."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+    assert not at.exception
+
+    matched = [e for e in at.expander if "시나리오 용어" in e.label]
+    assert len(matched) == 1
+    assert matched[0].proto.expanded is False
+    body = "\n".join(str(m.value) for m in matched[0].markdown)
+    for word in ("보수적 (Bear)", "기준 (Base)", "낙관적 (Bull)", "내 시나리오", "Y+1"):
+        assert word in body

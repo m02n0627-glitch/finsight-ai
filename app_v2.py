@@ -138,6 +138,37 @@ FEATURES = [
     ("공시 위험 · DART 원문", "최근 1년 공시 키워드와 사업보고서 원문 링크"),
 ]
 
+# ── 주요 지표의 '방향'과 상태 라벨 기준 ─────────────────────────────────────
+# 수치가 좋은 신호인지 부담인지 한눈에 보이도록 지표마다 기준선을 둔다.
+#   higher=True  → 값이 클수록 좋다 (영업이익률·ROE·유동비율)
+#   higher=False → 값이 작을수록 좋다 (부채비율·CCC)
+#   good : 이 값 이상(작을수록 좋은 지표는 이 값 이하)이면 '양호'
+#   mid  : 이 값 이상(이하)이면 '보통', 그 밖은 '부담'
+METRIC_RULES = {
+    "op_margin": {
+        "label": "영업이익률", "unit": "%", "digits": 1, "higher": True,
+        "good": 10.0, "mid": 0.0, "basis": "10% 이상 양호 · 0% 미만 적자(부담)",
+    },
+    "roe": {
+        "label": "ROE", "unit": "%", "digits": 1, "higher": True,
+        "good": 10.0, "mid": 0.0, "basis": "10% 이상 양호 · 0% 미만 부담",
+    },
+    "debt_ratio": {
+        "label": "부채비율", "unit": "%", "digits": 1, "higher": False,
+        "good": 100.0, "mid": 200.0, "basis": "100% 이하 양호 · 200% 초과 부담",
+    },
+    "current_ratio": {
+        "label": "유동비율", "unit": "%", "digits": 1, "higher": True,
+        "good": 150.0, "mid": 100.0, "basis": "150% 이상 양호 · 100% 미만 부담",
+    },
+    "ccc": {
+        "label": "CCC", "unit": "일", "digits": 0, "higher": False,
+        "good": 30.0, "mid": 90.0, "basis": "30일 이하 양호 · 90일 초과 부담",
+    },
+}
+KPI_METRIC_ORDER = ("op_margin", "roe", "debt_ratio", "current_ratio", "ccc")
+STATUS_WORD = {"good": "양호", "mid": "보통", "bad": "부담"}
+
 
 # ---------------------------------------------------------------------------
 # 1. 공통 유틸 (숫자·금액 표기, 엔진 호출)
@@ -191,6 +222,87 @@ def ratio_of(company, year, key):
 def state_badge(state):
     light, label, _color, _bg = STATE_STYLE.get(state, STATE_STYLE["na"])
     return "%s %s" % (light, label)
+
+
+def metric_value(company, year, key):
+    """주요 지표 값 하나 (영업이익률·ROE·부채비율·유동비율은 비율, CCC는 일)."""
+    if key == "ccc":
+        return ((company["years"].get(year) or {}).get("ccc") or {}).get("ccc")
+    return ratio_of(company, year, key)
+
+
+def metric_status(key, value):
+    """지표 값 → (tone, 라벨). 방향(높을수록/낮을수록 좋음)을 지표별로 구분한다.
+
+    tone 은 CSS 클래스 이름이자 의미다 — good(양호) / mid(보통) / bad(부담).
+    값을 알 수 없으면 (None, "").
+    """
+    rule = METRIC_RULES.get(key)
+    if not rule or value is None:
+        return None, ""
+    if rule["higher"]:
+        tone = "good" if value >= rule["good"] else ("mid" if value >= rule["mid"] else "bad")
+    else:                                   # 부채비율·CCC — 낮을수록 좋다
+        tone = "good" if value <= rule["good"] else ("mid" if value <= rule["mid"] else "bad")
+    return tone, STATUS_WORD[tone]
+
+
+def status_tag(tone, text, basis=""):
+    """작고 은은한 상태 라벨 — 메인 숫자보다 항상 작게(10.5px) 그린다."""
+    if not tone or not text:
+        return ""
+    tip = ' title="%s"' % html_lib.escape(basis, quote=True) if basis else ""
+    return '<span class="fs-tag %s"%s>%s</span>' % (tone, tip, html_lib.escape(text))
+
+
+def metric_status_tag(key, value):
+    """지표 값에 맞는 상태 라벨 HTML (기준선을 툴팁으로 함께)."""
+    tone, word = metric_status(key, value)
+    rule = METRIC_RULES.get(key) or {}
+    return status_tag(tone, word, rule.get("basis", ""))
+
+
+def peer_rows(analysis):
+    """동종업계 비교 표의 지표별 행 (한 기업 분석 + 비교 성공일 때만)."""
+    companies = analysis.get("companies") or []
+    block = analysis.get("industry_peers") or {}
+    if len(companies) > 1 or block.get("status") != "ok":
+        return {}
+    return {row["key"]: row for row in (block.get("rows") or [])}
+
+
+def peer_position(row, basis="평균"):
+    """대상 기업이 피어 평균보다 높은지/낮은지 + 그게 우위인지 열위인지.
+
+    '높음/낮음'은 사실 표기, '우위/열위'는 방향을 반영한 판정이다.
+    부채비율·CCC는 '낮음'이 우위다 — 이 구분을 여기서 한 번만 결정한다.
+    """
+    if not row:
+        return None
+    target, base = row.get("target"), row.get("mean")
+    if target is None or base is None:
+        return None
+    unit, digits = row["unit"], row["digits"]
+    shown = fs.format_peer_value(base, unit, digits)
+    if abs(target - base) < (10 ** (-digits)) / 2:
+        return {"text": "%s %s 비슷" % (basis, fs.with_josa(shown, "과", "와")),
+                "verdict": "비슷", "tone": "mid"}
+    higher = target > base
+    better = (higher == bool(row["higher_is_better"]))
+    return {
+        "text": "%s %s 대비 %s" % (basis, shown, "높음" if higher else "낮음"),
+        "verdict": "우위" if better else "열위",
+        "tone": "good" if better else "bad",
+    }
+
+
+def peer_cmp_html(position, cls="fs-peer-cmp"):
+    """'평균 8.1% 대비 높음 · 우위' — 11px 이하 회색 보조 문구."""
+    if not position:
+        return ""
+    return ('<div class="%s">%s <span class="fs-peer-verdict %s">%s</span></div>'
+            % (cls, html_lib.escape(position["text"]), position["tone"],
+               html_lib.escape(position["verdict"])))
 
 
 def text_labels(values, digits=0, suffix=""):
@@ -548,6 +660,44 @@ APP_CSS = """
   .fs-kpi .bar { height: 5px; border-radius: 999px; background: #F3F4F6; margin-top: 10px; overflow: hidden; }
   .fs-kpi .bar span { display: block; height: 100%; border-radius: 999px; }
   .fs-kpi .sub { font-size: 11.5px; color: #9CA3AF; margin-top: 8px; line-height: 1.5; }
+  /* 주요 지표 카드의 보조 문구 — 메인 숫자(23px)보다 항상 작은 11px 이하 회색 */
+  .fs-kpi .cmp { font-size: 10.5px; color: #9CA3AF; margin-top: 4px; line-height: 1.45; font-weight: 500; }
+  .fs-kpi .lbl .fs-tag { margin-left: 3px; vertical-align: 1px; }
+
+  /* ── 상태 라벨 · 평균 대비 보조 문구 ─────────────────────────── */
+  .fs-tag {
+      display: inline-block; font-size: 10.5px; font-weight: 600; line-height: 1.5;
+      padding: 0 5px; border-radius: 999px; letter-spacing: -0.01em;
+      background: #F3F4F6; color: #6B7280; white-space: nowrap;
+  }
+  .fs-tag.good { background: #EFF5F1; color: #5F7F6C; }   /* 채도 낮은 세이지 그린 */
+  .fs-tag.mid  { background: #F3F4F6; color: #6B7280; }   /* 무채색 그레이 */
+  .fs-tag.bad  { background: #F8F0EE; color: #96736C; }   /* 채도 낮은 클레이 */
+  .fs-metric-cmp, .fs-peer-cmp {
+      font-size: 11px; color: #9CA3AF; margin-top: 3px; line-height: 1.45;
+      font-weight: 500; font-variant-numeric: tabular-nums;
+  }
+  .fs-peer-cmp { font-size: 10.5px; margin-top: 2px; white-space: nowrap; }
+  /* 표 안에서는 행 강조(굵게·인디고)를 이어받지 않게 회색·보통 굵기로 되돌린다 */
+  .fs-fintable tr.fs-peer-target td .fs-peer-cmp { color: #9CA3AF; font-weight: 500; }
+  .fs-fintable tr.fs-peer-target td .fs-peer-cmp .fs-peer-verdict { font-weight: 600; }
+  .fs-peer-verdict { font-weight: 600; }
+  .fs-peer-verdict.good { color: #5F7F6C; }
+  .fs-peer-verdict.mid  { color: #8A929E; }
+  .fs-peer-verdict.bad  { color: #96736C; }
+
+  /* ── 접기 설명란(용어·목차) — 본문보다 조용하게 ────────────────── */
+  [data-testid="stExpander"] details {
+      border-radius: 14px !important; border-color: #ECEEF2 !important; background: #FFFFFF;
+  }
+  [data-testid="stExpander"] summary p {
+      font-size: 12.5px !important; font-weight: 600 !important; color: #4B5563 !important;
+  }
+  [data-testid="stExpander"] [data-testid="stMarkdownContainer"] p,
+  [data-testid="stExpander"] [data-testid="stMarkdownContainer"] li {
+      font-size: 13px; color: #4B5563; line-height: 1.75;
+  }
+  [data-testid="stExpander"] [data-testid="stMarkdownContainer"] strong { color: #1F2937; }
   .fs-company-tag {
       display: inline-flex; align-items: center; gap: 7px;
       font-size: 12.5px; font-weight: 700; color: #374151; margin: 6px 0 10px 2px;
@@ -670,6 +820,48 @@ KPI_TMPL = (
     '<div class="sub">{sub}</div>'
     '</div>'
 )
+
+# ── 탭 ② 용어·목차 설명 — 처음 보는 사람이 10초에 읽는 분량으로 ─────────────────
+GLOSSARY_TAB2 = """
+**화면 목차** — ① 핵심 재무·추이(얼마나 벌었나) · **② 지금 이 화면**(번 이유와 현금이 도는 속도) · ③ 리스크·공시 원문 · ④ FP&A 시나리오(앞으로 어떻게 될까)
+
+**FP&A** — Financial Planning & Analysis, *재무 계획과 분석*입니다. 끝난 회계연도의 숫자를 출발점으로
+“매출이 10% 늘면 3년 뒤 이익과 현금은 어떻게 되는가”를 계산하는 일입니다. 이 앱에서는 탭 ④ 시나리오가 FP&A입니다.
+
+**DuPont ROE 3단계 분해** — ROE(자기자본이익률)는 *주주 돈 100원으로 1년에 얼마를 벌었나*입니다.
+같은 ROE라도 버는 방법이 다르므로 세 조각으로 나눠 봅니다.
+
+- **순이익률** — 매출 100원 중 몇 원이 남는가 (수익성)
+- **총자산회전율** — 자산 1원이 1년에 매출을 몇 번 만드는가 (효율)
+- **재무레버리지** — 자기자본 1원에 빚을 얼마나 얹었는가 (위험)
+
+ROE 15%가 마진으로 번 것인지 빚으로 키운 것인지가 여기서 갈립니다. 빚으로 키운 ROE는 금리가 오르면 빠르게 흔들립니다.
+
+**운전자본 · CCC(현금전환주기)** — 물건을 사서 팔고 돈을 받기까지 현금이 묶여 있는 기간입니다.
+
+- **DSO** — 외상 판매 대금을 받기까지 걸리는 날 (매출채권 회수일)
+- **DIO** — 산 재고를 다 팔 때까지 걸리는 날 (재고 보유일)
+- **DPO** — 외상으로 산 물건 값을 갚기까지 버티는 날 (매입채무 지급일)
+
+**DSO + DIO − DPO = CCC**. 짧을수록 현금이 빨리 돌아오고, 음수면 물건값을 갚기 전에 돈을 받는 구조라 오히려 유리합니다(대형 유통업).
+
+**동종업계 비교** — 같은 업종코드 회사들의 같은 지표와 나란히 놓는 것입니다. 업종마다 마진·부채 수준이 달라
+절대값보다 *상대 위치*가 중요합니다. 피어가 2~3곳뿐이라 한 회사가 평균을 끌고 갈 수 있어 **평균과 중앙값**을 함께 봅니다.
+
+**양호 · 보통 · 부담** — 숫자 옆 작은 라벨은 좋은 신호인지 부담인지입니다. 영업이익률·ROE·유동비율은 **높을수록**,
+부채비율·CCC는 **낮을수록** 좋습니다. 업종 평균 대비는 높음/낮음 대신 **우위 · 열위**로 따로 적습니다.
+"""
+
+# ── 탭 ④ 시나리오 용어 (짧게) ───────────────────────────────────────────────
+GLOSSARY_TAB4 = """
+- **보수적 (Bear)** — 매출이 줄고 마진도 나빠지는 경우. 최악에 가까운 가정입니다.
+- **기준 (Base)** — 지금 추세가 그대로 이어지는 경우.
+- **낙관적 (Bull)** — 매출이 늘고 마진도 개선되는 경우.
+- **내 시나리오** — 아래 슬라이더 세 개(매출 성장률 · 영업이익률 변동 · CCC 변동)로 직접 만든 가정입니다.
+
+**Y+1 ~ Y+3** 은 출발 연도(마지막 결산) 다음 1~3년입니다. **누적 현금 영향**은 3년치 영업이익에서
+운전자본에 묶인 돈을 뺀 합계로, +면 현금이 늘고 −면 묶인 것입니다. 법인세·이자·설비투자는 빼지 않았습니다.
+"""
 
 
 def card(label, value, sub="", accent="#4F46E5", bar=None, bar_color=None):
@@ -914,12 +1106,16 @@ def disclosure_headline(company):
     return "조회 실패", (data.get("error") or "")[:60] or "공시검색 API 호출 실패", "#6B7280"
 
 
-def metric_block(label, value, note="", note_color=""):
-    """요약 카드 안 숫자 하나 — 라벨(작게) / 숫자(크게) / 한 줄 설명(작게)."""
+def metric_block(label, value, note="", note_color="", tag="", cmp_html=""):
+    """요약 카드 안 숫자 하나 — 라벨(작게) / 숫자(크게) / 한 줄 설명(작게).
+
+    tag·cmp_html 은 숫자보다 작은 보조 정보라서 숫자 아래(또는 라벨 옆)에만 둔다.
+    """
     note_style = ' style="color:%s"' % note_color if note_color else ""
     note_html = '<div class="fs-metric-note"%s>%s</div>' % (note_style, note) if note else ""
-    return ('<div class="fs-metric"><div class="fs-metric-lbl">%s</div>'
-            '<div class="fs-metric-val">%s</div>%s</div>' % (label, value, note_html))
+    return ('<div class="fs-metric"><div class="fs-metric-lbl">%s%s</div>'
+            '<div class="fs-metric-val">%s</div>%s%s</div>'
+            % (label, (" " + tag) if tag else "", value, note_html, cmp_html))
 
 
 def render_summary(analysis):
@@ -928,6 +1124,7 @@ def render_summary(analysis):
     years = analysis["years"]
     latest = years[-1]
 
+    peers = peer_rows(analysis)                  # 동종업계 비교가 있으면 영업이익률 옆에 '평균 대비' 한 줄
     for company in companies:
         risk = company["risk"]
         light, grade_label, grade_color, _bg = STATE_STYLE[risk["grade"]]
@@ -937,6 +1134,8 @@ def render_summary(analysis):
         op_margin = ratio_of(company, latest, "op_margin")
         prev_margin = ratio_of(company, years[-2], "op_margin") if len(years) >= 2 else None
         margin_diff = (op_margin - prev_margin) if (op_margin is not None and prev_margin is not None) else None
+        margin_cmp = peer_cmp_html(peer_position(peers.get("op_margin"), basis="업계 평균"),
+                                   "fs-metric-cmp")
 
         # 리스크는 위험 신호(🔴/🟡)에만 색을 준다. 안전은 무채색.
         risky = risk["grade"] in ("danger", "caution")
@@ -963,7 +1162,8 @@ def render_summary(analysis):
             metric_block("%d년 매출액" % latest, human_won(revenue),
                          "전년 대비 %s" % (num(revenue_growth, 1, "%") if revenue_growth is not None else "-")),
             metric_block("영업이익률", pct(op_margin),
-                         "전년 대비 %s" % (num(margin_diff, 1, "%p") if margin_diff is not None else "-")),
+                         "전년 대비 %s" % (num(margin_diff, 1, "%p") if margin_diff is not None else "-"),
+                         tag=metric_status_tag("op_margin", op_margin), cmp_html=margin_cmp),
             metric_block("최근 1년 공시 위험", d_value, disclosure_note),
         ])
 
@@ -1193,15 +1393,21 @@ def table_ccc(companies, years):
     st.caption("기말잔액 · 365일 기준 · 금융업 등은 비어 있을 수 있습니다")
 
 
-def peer_metric_cells(values):
-    """지표 하나하나를 표 셀 문자열로. 값이 없으면 흐린 '–'."""
+def peer_metric_cells(values, comparisons=None):
+    """지표 하나하나를 표 셀 문자열로. 값이 없으면 흐린 '–'.
+
+    comparisons: {지표키: peer_position()} — 대상 기업 행에만 '평균 대비 높음/낮음'을
+    숫자 아래 작은 회색 글씨로 붙인다(값 자체보다 작고 묽게).
+    """
     cells = []
     for key, _label, unit, _better, digits in fs.PEER_METRICS:
         text = fs.format_peer_value((values or {}).get(key), unit, digits)
         if text == "-":
-            cells.append('<td><span class="fs-na">-</span></td>')
+            inner = '<span class="fs-na">-</span>'
         else:
-            cells.append("<td>%s</td>" % html_lib.escape(text))
+            inner = html_lib.escape(text)
+        inner += peer_cmp_html((comparisons or {}).get(key))
+        cells.append("<td>%s</td>" % inner)
     return "".join(cells)
 
 
@@ -1218,8 +1424,10 @@ def industry_peer_table(peer_block):
 
     count = len(peer_block["peers"])
     body = []
+    positions = {row["key"]: peer_position(row) for row in peer_block["rows"]}
     body.append('<tr class="fs-peer-target"><th scope="row">%s<span class="fs-peer-tag">대상</span></th>%s</tr>'
-                % (html_lib.escape(peer_block["name"]), peer_metric_cells(peer_block["target_values"])))
+                % (html_lib.escape(peer_block["name"]),
+                   peer_metric_cells(peer_block["target_values"], positions)))
 
     average = {row["key"]: row["mean"] for row in peer_block["rows"]}
     median = {row["key"]: row["median"] for row in peer_block["rows"]}
@@ -1509,9 +1717,60 @@ def chart_fpa_scenarios(result):
 # 8. 탭 1 — 핵심 재무 & 추이
 # ---------------------------------------------------------------------------
 
+def metric_overview_card(key, company, latest, position=None, impaired=False):
+    """주요 지표 카드 한 장 — 큰 숫자 / 작은 상태 라벨 / (있으면) 회색 평균 대비 한 줄."""
+    rule = METRIC_RULES[key]
+    value = metric_value(company, latest, key)
+    head = "%s %s" % (html_lib.escape(rule["label"]), metric_status_tag(key, value))
+
+    # 자본잠식이면 부채비율·ROE는 음수 자본으로 왜곡되어 엔진이 계산하지 않는다.
+    if impaired and key in ("roe", "debt_ratio"):
+        return ('<div class="fs-kpi"><div class="lbl">%s %s</div>'
+                '<div class="val">-</div>'
+                '<div class="cmp">자본이 0 이하라 계산하지 않습니다</div></div>'
+                % (html_lib.escape(rule["label"]), status_tag("bad", "자본잠식 · 위험")))
+
+    shown = fs.format_peer_value(value, rule["unit"], rule["digits"])
+    if value is None:                        # 계산 자체가 안 되는 지표(금융업 CCC 등)
+        return ('<div class="fs-kpi"><div class="lbl">%s</div>'
+                '<div class="val">-</div>'
+                '<div class="cmp">공시된 계정이 없어 계산하지 않았습니다</div></div>'
+                % html_lib.escape(rule["label"]))
+    return ('<div class="fs-kpi"><div class="lbl">%s</div>'
+            '<div class="val">%s</div>%s</div>'
+            % (head, shown, peer_cmp_html(position)))
+
+
+def render_metric_overview(analysis):
+    """주요 5개 지표를 한 줄로 — 숫자보다 상태 라벨·평균 대비가 뒤로 묻히게(11px 이하)."""
+    companies, years = analysis["companies"], analysis["years"]
+    if len(companies) > 1:                       # 비교 모드는 기업 카드가 이미 나란히 있다
+        return
+    latest = years[-1]
+    company = companies[0]
+    positions = {key: peer_position(row) for key, row in peer_rows(analysis).items()}
+    try:
+        impaired = bool(fs.capital_impaired_info(company, latest)["impaired"])
+    except Exception:
+        impaired = False
+
+    note = "%d년 결산 기준 · 숫자 옆 라벨이 좋은 신호(양호)/부담 신호입니다" % latest
+    if positions:
+        note += " · 회색 글씨는 같은 업종 평균 대비 위치"
+    section_title("주요 지표", note + ".")
+
+    columns = st.columns(len(KPI_METRIC_ORDER))
+    for column, key in zip(columns, KPI_METRIC_ORDER):
+        column.markdown(metric_overview_card(key, company, latest, positions.get(key), impaired),
+                        unsafe_allow_html=True)
+    st.write("")
+
+
 def render_tab1(analysis):
     companies, years = analysis["companies"], analysis["years"]
     single = len(companies) == 1
+
+    render_metric_overview(analysis)
 
     # 제목은 여기서 한 번만 낸다. (표 함수에 같은 제목을 넘겨 두 줄로 겹치던 문제)
     section_title("핵심 재무제표")
@@ -1539,6 +1798,9 @@ def render_tab1(analysis):
             "| 매출액·영업이익 증가율 | (당기 − 전기) ÷ \\|전기\\| × 100 | 전기가 적자면 부호가 뒤집히지 않게 절댓값으로 나눔 |\n"
         )
         st.caption("ROE는 기말 자본 기준입니다. (기초+기말)/2 평균자본 기준과는 값이 조금 다를 수 있습니다. 자본잠식(자본총계 0 이하)인 해는 부채비율·ROE를 계산하지 않습니다.")
+        st.caption("상태 라벨 기준 — 영업이익률·ROE 10% 이상 양호(0% 미만 부담) · 부채비율 100% 이하 양호(200% 초과 부담) "
+                   "· 유동비율 150% 이상 양호(100% 미만 부담) · CCC 30일 이하 양호(90일 초과 부담). "
+                   "업종마다 적정 수준이 달라 참고용입니다.")
 
 
 # ---------------------------------------------------------------------------
@@ -1700,6 +1962,9 @@ def render_industry_block(analysis):
 
 
 def render_tab2(analysis):
+    # 접었다 펴는 용어·목차 설명 — 기본은 접힌 상태로 두어 본문 위계를 깨지 않는다.
+    with st.expander("📖 이 화면의 용어·목차가 뜻하는 것 (FP&A · DuPont · CCC)", expanded=False):
+        st.markdown(GLOSSARY_TAB2)
     render_dupont_block(analysis)
     st.divider()
     render_ccc_block(analysis)
@@ -1899,6 +2164,9 @@ def render_fpa_simulator(company, latest):
 def render_tab4(analysis):
     companies, years = analysis["companies"], analysis["years"]
     latest = years[-1]
+
+    with st.expander("📖 시나리오 용어 (보수적 · 기준 · 낙관적 · 내 시나리오)", expanded=False):
+        st.markdown(GLOSSARY_TAB4)
 
     section_title(
         "FP&A 3개년 시나리오 시뮬레이터",
