@@ -2232,3 +2232,16 @@ def test_simulate_fpa_scenarios_does_not_mutate_company():
     fs.simulate_fpa_scenarios(company, revenue_growth_pct=12.0, ccc_delta_days=-10)
     after = json.dumps({str(y): company["years"][y]["accounts"] for y in company["years"]}, sort_keys=True)
     assert before == after                               # 순수 함수 — 입력을 바꾸지 않는다
+
+
+def test_simulate_fpa_scenarios_insight_reads_equal_when_custom_matches_base():
+    """가정이 모두 0이면 내 시나리오 = 기준 — '0억원 많습니다' 대신 '같습니다'로 읽힌다."""
+    result = fs.simulate_fpa_scenarios(fpa_company())
+
+    assert result["custom"]["cum_cash_impact"] == pytest.approx(result["scenarios"][1]["cum_cash_impact"])
+    assert "기준 시나리오와 같습니다" in result["insights"][1]
+    assert "0억원" not in result["insights"][1]
+
+    # 가정을 움직이면 다시 '많습니다/적습니다'로 돌아온다
+    moved = fs.simulate_fpa_scenarios(fpa_company(), revenue_growth_pct=20.0)
+    assert ("많습니다" in moved["insights"][1]) or ("적습니다" in moved["insights"][1])

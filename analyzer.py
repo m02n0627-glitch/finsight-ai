@@ -1495,12 +1495,18 @@ def _fpa_insights(baseline, scenarios):
 
     if custom and custom.get("cum_cash_impact") is not None and base and base.get("cum_cash_impact") is not None:
         diff = custom["cum_cash_impact"] - base["cum_cash_impact"]
-        lines.append(
-            "내 시나리오(성장 %+.0f%% · 영업이익률 %+.1f%%p · CCC %+.0f일)의 3년 누적 현금 영향은 %s으로, "
-            "기준 시나리오 %s보다 %s %s." % (
-                custom["revenue_growth_pct"], custom["op_margin_delta_pp"], custom["ccc_delta_days"],
-                short_won(custom["cum_cash_impact"]), short_won(base["cum_cash_impact"]),
-                short_won(abs(diff)), "많습니다" if diff >= 0 else "적습니다"))
+        assumptions_text = "내 시나리오(성장 %+.0f%% · 영업이익률 %+.1f%%p · CCC %+.0f일)" % (
+            custom["revenue_growth_pct"], custom["op_margin_delta_pp"], custom["ccc_delta_days"])
+        if abs(diff) < 0.5e8:                    # 0.5억원 미만 차이는 '같음'으로 읽히게
+            lines.append(
+                "%s의 3년 누적 현금 영향은 %s으로, 기준 시나리오와 같습니다." % (
+                    assumptions_text, short_won(custom["cum_cash_impact"])))
+        else:
+            lines.append(
+                "%s의 3년 누적 현금 영향은 %s으로, 기준 시나리오 %s보다 %s %s." % (
+                    assumptions_text, short_won(custom["cum_cash_impact"]),
+                    short_won(base["cum_cash_impact"]), short_won(abs(diff)),
+                    "많습니다" if diff > 0 else "적습니다"))
     elif custom and custom.get("total_wc_cash_impact") is not None:
         inflow = custom["total_wc_cash_impact"] >= 0
         lines.append(
