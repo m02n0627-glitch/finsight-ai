@@ -28,6 +28,7 @@ CSS로 사이드바 토글·여백을 없애고, 최대 너비를 가운데 정�
 """
 
 import contextlib
+import html as html_lib
 import io
 import os
 import sys
@@ -62,7 +63,7 @@ st.set_page_config(
 # 0. 화면 상수
 # ---------------------------------------------------------------------------
 
-PALETTE = ["#2563EB", "#F97316"]                # 비교 모드에서 회사별 색
+PALETTE = ["#111827", "#4F46E5"]                # 비교 모드에서 회사별 색 (다크 슬레이트 · 블루)
 DART_KEY_URL = "https://opendart.fss.or.kr/uss/umt/EgovMberSbscrbView.do"
 ANCHOR_ID = "analysis-result"                    # 결과 영역 스크롤 앵커
 
@@ -85,7 +86,7 @@ STATE_STYLE = {
     "safe": ("🟢", "안전", "#15803D", "#DCFCE7"),
     "caution": ("🟡", "주의", "#B45309", "#FEF3C7"),
     "danger": ("🔴", "위험", "#B91C1C", "#FEE2E2"),
-    "na": ("⚪", "N/A", "#475569", "#F1F5F9"),
+    "na": ("⚪", "N/A", "#475569", "#F3F4F6"),
 }
 
 CORE_ROWS = [
@@ -109,17 +110,17 @@ EXTRA_ROWS = [
 ]
 
 RATIO_SERIES = [
-    ("op_margin", "영업이익률", "#2563EB", "solid"),
-    ("net_margin", "순이익률", "#0EA5E9", "solid"),
-    ("roe", "ROE", "#7C3AED", "solid"),
-    ("debt_ratio", "부채비율", "#F97316", "dot"),
-    ("current_ratio", "유동비율", "#10B981", "dot"),
+    ("op_margin", "영업이익률", "#4F46E5", "solid"),
+    ("net_margin", "순이익률", "#6B7280", "solid"),
+    ("roe", "ROE", "#111827", "solid"),
+    ("debt_ratio", "부채비율", "#9CA3AF", "dot"),
+    ("current_ratio", "유동비율", "#D1D5DB", "dot"),
 ]
 
 FEATURES = [
-    ("🚦", "5대 리스크 100점", "유동비율·부채비율·이자보상배율·현금흐름·부실예측을 신호등으로"),
-    ("🔺", "DuPont ROE · CCC", "ROE를 3요인으로 분해하고 현금전환주기로 운전자본을 봅니다"),
-    ("📰", "공시 위험 · DART 원문", "최근 1년 공시 제목의 위험 키워드와 사업보고서 원문 링크까지"),
+    ("리스크 점수 100점", "유동비율·부채비율·이자보상배율·현금흐름·부실예측"),
+    ("DuPont ROE · CCC", "ROE 3요인 분해와 현금전환주기"),
+    ("공시 위험 · DART 원문", "최근 1년 공시 키워드와 사업보고서 원문 링크"),
 ]
 
 
@@ -319,15 +320,14 @@ def params_changed(current, saved):
 
 APP_CSS = """
 <style>
+  @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
   /* ── 기본 타이포그래피 ─────────────────────────────────────────── */
-  html, body, [class*="st-"], [data-testid="stAppViewContainer"] {
-      font-family: "Pretendard", "Inter", -apple-system, BlinkMacSystemFont,
-                   "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  html, body, [class*="css"], [class*="st-"], [data-testid="stAppViewContainer"] {
+      font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+                   "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   }
   .stApp {
-      background:
-          radial-gradient(1100px 520px at 50% -10%, #E6EDFF 0%, rgba(247,249,252,0) 62%),
-          #F7F9FC;
+      background: #FFFFFF;
   }
   .block-container {
       max-width: 1120px;
@@ -335,7 +335,7 @@ APP_CSS = """
       padding-bottom: 4rem;
       margin: 0 auto;
   }
-  h1, h2, h3, h4 { color: #0F172A; letter-spacing: -0.02em; }
+  h1, h2, h3, h4 { color: #111827; letter-spacing: -0.02em; }
 
   /* ── 사이드바 제거 (없는 사이드바의 토글·여백까지) ────────────── */
   [data-testid="stSidebar"],
@@ -345,46 +345,36 @@ APP_CSS = """
   button[data-testid="stSidebarCollapseButton"] { display: none !important; }
   header[data-testid="stHeader"] { background: transparent; }
 
-  /* ── 히어로 헤더 ─────────────────────────────────────────────── */
+  /* ── 히어로 헤더 (딥 차콜 카드) ─────────────────────────────── */
   .fs-hero {
-      position: relative; overflow: hidden;
-      background: linear-gradient(135deg, #0B1220 0%, #162B5B 46%, #2563EB 100%);
-      border-radius: 24px;
-      padding: 30px 32px 28px;
-      color: #FFFFFF;
-      margin: 4px 0 20px 0;
-      box-shadow: 0 24px 48px -30px rgba(15, 23, 42, .75);
+      background: #131315;
+      border-radius: 22px;
+      padding: 26px 30px 34px;
+      margin: 0 0 22px 0;
   }
-  .fs-hero::after {
-      content: ""; position: absolute; right: -80px; top: -90px;
-      width: 260px; height: 260px; border-radius: 50%;
-      background: radial-gradient(circle at 30% 30%, rgba(147,197,253,.45), rgba(37,99,235,0) 68%);
+  .fs-hero-top {
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-bottom: 46px;
   }
-  .fs-hero-badge {
-      display: inline-flex; align-items: center; gap: 8px;
-      font-size: 11.5px; font-weight: 800; letter-spacing: .16em;
-      color: #BFDBFE; background: rgba(255,255,255,.10);
-      border: 1px solid rgba(191,219,254,.35);
-      padding: 5px 12px; border-radius: 999px;
-  }
+  .fs-hero-brand { font-size: 13px; font-weight: 700; color: #F9FAFB; letter-spacing: -0.01em; }
+  .fs-hero-count { font-size: 11.5px; color: #6B7280; font-variant-numeric: tabular-nums; }
+  .fs-hero-label { font-size: 12.5px; color: #9CA3AF; margin-bottom: 10px; }
   .fs-hero-title {
-      font-size: 32px; font-weight: 800; letter-spacing: -0.03em;
-      line-height: 1.22; margin: 14px 0 0 0;
+      font-size: 34px; font-weight: 800; letter-spacing: -0.04em;
+      line-height: 1.24; color: #FFFFFF;
   }
-  .fs-hero-title .thin { color: #BFDBFE; font-weight: 600; }
+  .fs-hero-title .accent { color: #7C83FF; }
   .fs-hero-sub {
-      font-size: 13.5px; color: #D6E4FF; margin-top: 10px; line-height: 1.65;
-      max-width: 640px;
+      font-size: 13px; color: #9CA3AF; margin-top: 14px; line-height: 1.7;
   }
 
-  /* ── 가운데 입력 카드 ────────────────────────────────────────── */
+  /* ── 입력 카드 ──────────────────────────────────────────────── */
   .st-key-fs2-inputcard,
   .st-key-fs2-keycard {
       background: #FFFFFF;
-      border: 1px solid #E6EBF4 !important;
-      border-radius: 22px !important;
-      padding: 24px 26px 20px !important;
-      box-shadow: 0 22px 50px -34px rgba(15, 23, 42, .55), 0 2px 8px rgba(15, 23, 42, .04);
+      border: 1px solid #E5E7EB !important;
+      border-radius: 18px !important;
+      padding: 22px 24px 18px !important;
   }
   /* 같은 key 클래스가 안쪽 블록에도 붙는 경우 — 카드가 두 겹으로 겹치지 않게 */
   .st-key-fs2-inputcard .st-key-fs2-inputcard,
@@ -394,13 +384,13 @@ APP_CSS = """
       border: none !important; background: transparent !important;
       padding: 0 !important; border-radius: 0 !important; box-shadow: none !important;
   }
-  .fs-card-title { font-size: 17px; font-weight: 800; color: #0F172A; letter-spacing: -0.02em; }
-  .fs-card-sub { font-size: 12.5px; color: #64748B; margin: 4px 0 16px 0; line-height: 1.55; }
-  .fs-card-foot { font-size: 11.5px; color: #94A3B8; margin-top: 10px; text-align: center; }
+  .fs-card-title { font-size: 17px; font-weight: 800; color: #111827; letter-spacing: -0.02em; }
+  .fs-card-sub { font-size: 12.5px; color: #6B7280; margin: 4px 0 16px 0; line-height: 1.55; }
+  .fs-card-foot { font-size: 11.5px; color: #9CA3AF; margin-top: 10px; text-align: center; }
 
   /* ── 입력 위젯 다듬기 ────────────────────────────────────────── */
   [data-testid="stWidgetLabel"] p {
-      font-size: 12.5px !important; font-weight: 700 !important; color: #334155 !important;
+      font-size: 12.5px !important; font-weight: 700 !important; color: #374151 !important;
   }
   [data-testid="stTextInput"] div[data-baseweb="input"],
   [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
@@ -412,8 +402,8 @@ APP_CSS = """
   }
   [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within,
   [data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
-      border-color: #2563EB !important;
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, .12) !important;
+      border-color: #4F46E5 !important;
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, .12) !important;
   }
   [data-testid="stTextInput"] input { font-size: 14px; }
   [data-baseweb="popover"] li { font-size: 13.5px; }
@@ -427,13 +417,13 @@ APP_CSS = """
       font-weight: 800 !important;
       letter-spacing: -0.01em;
       border: none !important;
-      background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
-      box-shadow: 0 14px 30px -16px rgba(37, 99, 235, .95);
+      background: #4F46E5 !important;
+      box-shadow: none;
       transition: transform .14s ease, box-shadow .14s ease;
   }
   [data-testid="stBaseButton-primary"]:hover, button[kind="primary"]:hover {
       transform: translateY(-1px);
-      box-shadow: 0 18px 34px -16px rgba(37, 99, 235, 1);
+      box-shadow: none;
   }
   [data-testid="stBaseButton-secondary"] {
       border-radius: 12px !important; font-weight: 700 !important;
@@ -442,7 +432,7 @@ APP_CSS = """
 
   /* ── 랜딩 힌트 카드 ──────────────────────────────────────────── */
   .fs-hint {
-      text-align: center; font-size: 13px; color: #64748B; margin: 22px 0 14px 0;
+      text-align: center; font-size: 13px; color: #6B7280; margin: 22px 0 14px 0;
   }
   .fs-hint-card {
       background: rgba(255,255,255,.72);
@@ -452,99 +442,134 @@ APP_CSS = """
   }
   .fs-hint-row {
       display: flex; align-items: flex-start; gap: 12px;
-      padding: 13px 0; border-bottom: 1px dashed #E6EBF4;
+      padding: 13px 0; border-bottom: 1px dashed #E5E7EB;
   }
   .fs-hint-row:last-child { border-bottom: none; }
-  .fs-hint-row .ico { font-size: 17px; line-height: 1.5; }
   .fs-hint-row b { display: block; font-size: 13px; color: #1E293B; }
   .fs-hint-row span.txt { font-size: 12px; color: #7A8798; }
 
   /* ── 결과 헤더 ───────────────────────────────────────────────── */
-  .fs-result-head {
-      background: #FFFFFF; border: 1px solid #E6EBF4; border-radius: 20px;
-      padding: 22px 24px; margin-bottom: 14px;
-      box-shadow: 0 18px 40px -36px rgba(15, 23, 42, .6);
-  }
-  .fs-eyebrow {
-      font-size: 11px; font-weight: 800; letter-spacing: .16em; color: #2563EB;
-  }
+  .fs-result-head { padding: 2px 2px 0 2px; margin-bottom: 16px; }
   .fs-result-title {
-      font-size: 26px; font-weight: 800; color: #0F172A; letter-spacing: -0.03em;
-      margin: 8px 0 12px 0; line-height: 1.25;
+      font-size: 22px; font-weight: 700; color: #111827; letter-spacing: -0.03em;
+      line-height: 1.3;
   }
-  .fs-result-title .vs { color: #94A3B8; font-weight: 600; font-size: 20px; margin: 0 6px; }
-  .fs-chips { display: flex; flex-wrap: wrap; gap: 7px; }
-  .fs-chip {
-      display: inline-flex; align-items: center; gap: 5px;
-      font-size: 11.5px; font-weight: 600; color: #475569;
-      background: #F4F7FC; border: 1px solid #E6EBF4;
-      padding: 4px 10px; border-radius: 999px;
+  .fs-result-title .vs { color: #D1D5DB; font-weight: 500; font-size: 17px; margin: 0 7px; }
+  .fs-result-meta {
+      font-size: 12px; color: #9CA3AF; margin-top: 6px; font-variant-numeric: tabular-nums;
   }
-  .fs-chip b { color: #1E293B; font-weight: 800; }
-  .fs-chip-link { color: #1D4ED8; background: #EEF4FF; border-color: #D7E3FF; text-decoration: none; }
-  .fs-chip-link:hover { background: #E2ECFF; }
+  .fs-result-meta a { color: #4F46E5; text-decoration: none; margin-left: 9px; }
+  .fs-result-meta a:hover { text-decoration: underline; }
+
+  /* ── 요약 카드 (기업별 핵심 숫자 4개) ─────────────────────────── */
+  .fs-summary {
+      background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 16px;
+      padding: 18px 20px 20px; margin: 0 0 10px 0;
+  }
+  .fs-summary-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 10px; margin-bottom: 14px;
+  }
+  .fs-summary-name { font-size: 15px; font-weight: 700; color: #111827; }
+  .fs-summary-code {
+      font-size: 11.5px; font-weight: 500; color: #9CA3AF; margin-left: 7px;
+      font-variant-numeric: tabular-nums;
+  }
+  .fs-mini-link { font-size: 12px; font-weight: 600; color: #4F46E5; text-decoration: none; }
+  .fs-mini-link:hover { text-decoration: underline; }
+  .fs-summary-grid {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px;
+  }
+  .fs-metric-lbl { font-size: 11.5px; color: #9CA3AF; font-weight: 500; margin-bottom: 4px; }
+  .fs-metric-val {
+      font-size: 21px; font-weight: 700; color: #111827; letter-spacing: -0.02em;
+      line-height: 1.25; font-variant-numeric: tabular-nums;
+  }
+  .fs-metric-note {
+      font-size: 11.5px; color: #9CA3AF; margin-top: 3px; font-variant-numeric: tabular-nums;
+  }
 
   /* ── 지표 카드 ───────────────────────────────────────────────── */
   .fs-kpi {
-      background: #FFFFFF; border: 1px solid #E6EBF4; border-top-width: 3px;
-      border-radius: 16px; padding: 15px 17px 16px; min-height: 132px;
-      box-shadow: 0 12px 30px -30px rgba(15, 23, 42, .7);
+      background: #FFFFFF; border: 1px solid #E5E7EB; border-top-color: #E5E7EB !important;
+      border-radius: 14px; padding: 14px 16px; min-height: 116px;
       display: flex; flex-direction: column; justify-content: space-between;
   }
-  .fs-kpi .lbl { font-size: 11.5px; font-weight: 800; color: #64748B; letter-spacing: .02em; }
-  .fs-kpi .val { font-size: 25px; font-weight: 800; color: #0F172A; margin-top: 7px; line-height: 1.16; }
-  .fs-kpi .bar { height: 6px; border-radius: 999px; background: #EEF2F8; margin-top: 10px; overflow: hidden; }
+  .fs-kpi .lbl { font-size: 11.5px; font-weight: 600; color: #9CA3AF; }
+  .fs-kpi .val {
+      font-size: 23px; font-weight: 700; color: #111827; margin-top: 6px;
+      line-height: 1.16; font-variant-numeric: tabular-nums;
+  }
+  .fs-kpi .bar { height: 5px; border-radius: 999px; background: #F3F4F6; margin-top: 10px; overflow: hidden; }
   .fs-kpi .bar span { display: block; height: 100%; border-radius: 999px; }
-  .fs-kpi .sub { font-size: 11.5px; color: #64748B; margin-top: 9px; line-height: 1.5; }
+  .fs-kpi .sub { font-size: 11.5px; color: #9CA3AF; margin-top: 8px; line-height: 1.5; }
   .fs-company-tag {
       display: inline-flex; align-items: center; gap: 7px;
-      font-size: 12.5px; font-weight: 800; color: #0F172A; margin: 6px 0 10px 2px;
+      font-size: 12.5px; font-weight: 700; color: #374151; margin: 6px 0 10px 2px;
   }
-  .fs-company-tag i { display: inline-block; width: 4px; height: 14px; border-radius: 3px; }
+  .fs-company-tag i { display: inline-block; width: 3px; height: 12px; border-radius: 3px; }
 
   /* ── 알림 · 고지 박스 ────────────────────────────────────────── */
   .fs-alert {
-      border-radius: 14px; padding: 13px 16px; font-size: 12.8px; line-height: 1.65;
-      margin: 14px 0 0 0; border: 1px solid #FDE3C8; background: #FFF8EE; color: #8A4B0A;
+      border-radius: 12px; padding: 11px 14px; font-size: 12.5px; line-height: 1.6;
+      margin: 14px 0 0 0; border: 1px solid #E5E7EB; background: #FFFFFF; color: #475569;
   }
-  .fs-alert.danger { border-color: #FBD5D5; background: #FFF4F4; color: #9B1C1C; }
-  .fs-alert.info { border-color: #DCE3EF; background: #F8FAFC; color: #475569; }
+  .fs-alert.danger { border-color: #F3DADA; color: #9B1C1C; }
+  .fs-alert.info { border-color: #E5E7EB; color: #6B7280; }
   .fs-alert b { color: inherit; }
 
-  .fs-disclaimer {
-      background: #F8FAFC; border: 1px solid #E6EBF4; border-radius: 16px;
-      padding: 15px 18px; font-size: 12.3px; color: #475569; line-height: 1.75;
-      margin-top: 16px;
-  }
-  .fs-disclaimer b { color: #0F172A; }
 
   /* ── 섹션 제목 · 인용 박스 ───────────────────────────────────── */
   .fs-section-title {
-      font-size: 16px; font-weight: 800; color: #0F172A; margin: 20px 0 3px 0;
-      display: flex; align-items: center; gap: 8px; letter-spacing: -0.02em;
+      font-size: 15px; font-weight: 700; color: #111827; margin: 26px 0 10px 0;
+      letter-spacing: -0.02em;
   }
-  .fs-note { font-size: 12.3px; color: #64748B; line-height: 1.65; margin-bottom: 6px; }
+  .fs-note { font-size: 12px; color: #9CA3AF; line-height: 1.6; margin-bottom: 6px; }
   .fs-quote {
-      background: #FFFFFF; border: 1px solid #E6EBF4; border-left: 4px solid #2563EB;
-      border-radius: 12px; padding: 13px 16px; font-size: 13px; color: #1E293B;
-      line-height: 1.7; margin: 10px 0 4px 0;
+      border-left: 2px solid #E5E7EB; padding: 2px 0 2px 12px;
+      font-size: 13px; color: #475569; line-height: 1.7; margin: 10px 0 4px 0;
   }
 
   /* ── 탭 ──────────────────────────────────────────────────────── */
   .stTabs [data-baseweb="tab-list"] {
-      gap: 6px; border-bottom: 1px solid #E6EBF4; padding-bottom: 0;
+      gap: 6px; border-bottom: 1px solid #E5E7EB; padding-bottom: 0;
   }
   .stTabs [data-baseweb="tab"] {
       height: 44px; padding: 0 16px; border-radius: 12px 12px 0 0;
-      font-size: 13px; font-weight: 700; color: #64748B; background: transparent;
+      font-size: 13px; font-weight: 700; color: #6B7280; background: transparent;
   }
-  .stTabs [data-baseweb="tab"]:hover { color: #1D4ED8; background: #F4F7FF; }
-  .stTabs [aria-selected="true"] { color: #1D4ED8 !important; background: #EFF4FF !important; }
-  .stTabs [data-baseweb="tab-highlight"] { background-color: #2563EB; }
+  .stTabs [data-baseweb="tab"]:hover { color: #4338CA; background: #F5F3FF; }
+  .stTabs [aria-selected="true"] { color: #4338CA !important; background: #EEF2FF !important; }
+  .stTabs [data-baseweb="tab-highlight"] { background-color: #4F46E5; }
 
   /* ── 표 · 차트 ───────────────────────────────────────────────── */
-  div[data-testid="stDataFrame"] { border: 1px solid #E6EBF4; border-radius: 14px; overflow: hidden; }
+  div[data-testid="stDataFrame"] { border: 1px solid #E5E7EB; border-radius: 14px; overflow: hidden; }
   [data-testid="stMetricValue"] { font-size: 1.45rem; }
+
+  /* ── 계정 표: 숫자가 DART 원문 링크 ──────────────────────────── */
+  .fs-fintable {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+      font-variant-numeric: tabular-nums; margin: 2px 0 6px 0;
+  }
+  .fs-fintable th, .fs-fintable td {
+      padding: 7px 10px; border-bottom: 1px solid #F3F4F6; white-space: nowrap;
+  }
+  .fs-fintable thead th {
+      background: #F9FAFB; color: #374151; font-size: 12px; font-weight: 800;
+  }
+  .fs-fintable tbody th { text-align: left; font-weight: 600; color: #374151; }
+  .fs-fintable th + th, .fs-fintable td { text-align: right; }
+  .fs-fintable tbody tr:hover { background: #F9FAFB; }
+  .fs-fintable a.fs-num {
+      color: #111827; text-decoration: none; border-bottom: 1px solid #E5E7EB;
+      padding-bottom: 1px; transition: color .12s ease, border-color .12s ease;
+  }
+  .fs-fintable a.fs-num:hover { color: #4F46E5; border-bottom-color: #4F46E5; }
+  .fs-fintable a.fs-year {
+      color: #6B7280; text-decoration: none; border-bottom: 1px solid #E5E7EB;
+  }
+  .fs-fintable a.fs-year:hover { color: #4F46E5; border-bottom-color: #4F46E5; }
+  .fs-fintable .fs-na { color: #9CA3AF; }
   footer, #MainMenu { visibility: hidden; }
 
   @media (max-width: 640px) {
@@ -559,26 +584,22 @@ APP_CSS = """
 
 HERO_TMPL = """
 <div class="fs-hero">
-  <div class="fs-hero-badge">◆&nbsp; FINSIGHT &nbsp;·&nbsp; 규칙 기반 기업 재무·리스크 분석</div>
-  <div class="fs-hero-title">재무제표와 공시를 읽어,<br>기업의 체력을 한 장으로 <span class="thin">정리합니다</span></div>
-  <div class="fs-hero-sub">
-    OpenDART 사업보고서를 그대로 불러와 5대 리스크 점수 · DuPont ROE · 현금전환주기(CCC) ·
-    최근 1년 공시 위험까지 한 화면에 담습니다. 기업을 고르고 분석 실행만 누르면 됩니다.<br>
-    모든 수치 계산·DuPont·CCC·리스크 판정은 <b>결정론적 Python 규칙</b>으로 처리하며
-    LLM 추론이나 생성 모델에 의존하지 않습니다.
+  <div class="fs-hero-top">
+    <div class="fs-hero-brand">FinSight</div>
+    <div class="fs-hero-count">OpenDART 사업보고서</div>
   </div>
+  <div class="fs-hero-label">규칙 기반 기업 재무 분석</div>
+  <div class="fs-hero-title">재무제표와 공시를,<br><span class="accent">한 장</span>으로.</div>
+  <div class="fs-hero-sub">리스크 점수 · DuPont ROE · CCC · 공시 위험을 DART 원문에서 바로 계산합니다.</div>
 </div>
 """
 
 DISCLAIMER_TMPL = (
-    '<div class="fs-disclaimer">'
-    '<b>🧪 1차 건전성 스크리닝입니다</b> — 과거 결산 재무제표와 최근 1년 공시 <b>제목 키워드</b>를 '
-    '훑는 수준의 점검입니다. 업종별 구조 차이(금융업·건설업 등), 금리·환율·업황 같은 향후 시장 변수, '
-    '주가·시가총액은 반영하지 않았습니다. 5대 리스크 점수는 3단계 판정(🟢20점 / 🟡10점 / 🔴0점)이라 '
-    '같은 등급 안의 미세한 차이는 드러나지 않습니다. <b>투자 판단·신용평가가 아니며</b>, 최종 판단 전에는 '
-    'DART 원문과 업종 비교군을 함께 확인하세요. 모든 수치는 <b>연결재무제표 우선</b>(없으면 별도) · '
-    '<b>기말잔액 기준</b>입니다.'
-    '</div>'
+    '과거 결산 재무제표와 최근 1년 공시 <b>제목 키워드</b>를 훑는 1차 스크리닝입니다. '
+    '업종별 구조 차이(금융업·건설업 등), 금리·환율·업황 같은 향후 변수, 주가·시가총액은 반영하지 않습니다. '
+    '5대 리스크 점수는 3단계 판정(20/10/0점)이라 같은 등급 안의 미세한 차이는 드러나지 않습니다. '
+    '<b>투자 판단·신용평가가 아니며</b>, 최종 판단 전에는 DART 원문과 업종 비교군을 함께 확인하세요. '
+    '모든 수치는 <b>연결재무제표 우선</b>(없으면 별도) · <b>기말잔액 기준</b>입니다.'
 )
 
 KPI_TMPL = (
@@ -591,7 +612,7 @@ KPI_TMPL = (
 )
 
 
-def card(label, value, sub="", accent="#2563EB", bar=None, bar_color=None):
+def card(label, value, sub="", accent="#4F46E5", bar=None, bar_color=None):
     """결과 상단 지표 카드 한 장 (진행 막대는 선택)."""
     bar_html = ""
     if bar is not None:
@@ -642,15 +663,15 @@ def center_columns():
 
 
 def render_landing_hint():
-    """첫 화면 — 무엇을 해 주는 앱인지 한 번 더 짧게."""
+    """첫 화면 — 무엇을 해 주는 앱인지 짧게."""
     _left, middle, _right = center_columns()
     with middle:
-        st.markdown('<div class="fs-hint">기업을 고르고 <b>🔎 분석 실행</b>을 누르면 결과가 아래에 펼쳐집니다.</div>',
+        st.markdown('<div class="fs-hint">기업을 고르고 <b>분석 실행</b>을 누르면 결과가 아래에 펼쳐집니다.</div>',
                     unsafe_allow_html=True)
         rows = "".join(
-            '<div class="fs-hint-row"><span class="ico">%s</span>'
-            '<div><b>%s</b><span class="txt">%s</span></div></div>' % (icon, title, note)
-            for icon, title, note in FEATURES
+            '<div class="fs-hint-row"><div><b>%s</b><span class="txt">%s</span></div></div>'
+            % (title, note)
+            for title, note in FEATURES
         )
         st.markdown('<div class="fs-hint-card">%s</div>' % rows, unsafe_allow_html=True)
 
@@ -662,11 +683,10 @@ def render_key_gate():
         with card_container("fs2-keycard"):
             st.markdown(
                 '<div class="fs-card-title">OpenDART 인증키가 필요합니다</div>'
-                '<div class="fs-card-sub">공시 데이터를 받아오려면 금융감독원 OpenDART 인증키가 있어야 합니다. '
-                '무료로 발급받아(하루 20,000건) 아래에 붙여 넣어 주세요.</div>',
+                '<div class="fs-card-sub">금융감독원 OpenDART 인증키가 필요합니다. 무료로 발급받아 아래에 붙여 넣어 주세요.</div>',
                 unsafe_allow_html=True,
             )
-            with st.expander("🔑 OpenDART 인증키 입력", expanded=True):
+            with st.expander("OpenDART 인증키 입력", expanded=True):
                 api_key = st.text_input(
                     "인증키 (40자리)",
                     type="password",
@@ -749,7 +769,7 @@ def render_input_card(corp_list, api_key, key_source):
             _space, button_column, _space2 = st.columns([1, 2, 1])
             with button_column:
                 clicked = st.button(
-                    "🔎 분석 실행",
+                    "분석 실행",
                     type="primary",
                     use_container_width=True,
                     key="fs2_run",
@@ -762,7 +782,7 @@ def render_input_card(corp_list, api_key, key_source):
                     unsafe_allow_html=True,
                 )
             else:
-                with st.expander("🔑 OpenDART 인증키 직접 입력", expanded=False):
+                with st.expander("OpenDART 인증키 직접 입력", expanded=False):
                     typed = st.text_input(
                         "인증키 (40자리)",
                         type="password",
@@ -803,31 +823,21 @@ def render_result_head(analysis):
     companies = analysis["companies"]
     years = analysis["years"]
 
-    names = []
-    for index, company in enumerate(companies):
-        if index:
-            names.append('<span class="vs">vs</span>')
-        names.append(company["name"])
-
-    chips = []
-    for company in companies:
-        chips.append('<span class="fs-chip"><b>%s</b> %s</span>'
-                     % (company["name"], company["stock_code"] or "-"))
+    title = ' <span class="vs">vs</span> '.join(html_lib.escape(c["name"]) for c in companies)
     fs_names = sorted({c.get("fs_nm") or "-" for c in companies})
-    chips.append('<span class="fs-chip">%s</span>' % " / ".join(fs_names))
-    chips.append('<span class="fs-chip">%d–%d 사업보고서(연간)</span>' % (years[0], years[-1]))
-    for company in companies:
-        link = fs.dart_link(company.get("latest_rcept_no") or "")
-        if link:
-            chips.append('<a class="fs-chip fs-chip-link" href="%s" target="_blank">%s 최신 원문 ↗</a>'
-                         % (link, company["name"]))
+    meta = "%d–%d 사업보고서 · %s" % (years[0], years[-1], " / ".join(fs_names))
+    links = "".join(
+        '<a href="%s" target="_blank" rel="noopener noreferrer" title="%s 최신 사업보고서 원문">%s 원문 ↗</a>'
+        % (html_lib.escape(fs.dart_link(c.get("latest_rcept_no") or ""), quote=True),
+           html_lib.escape(c["name"]), html_lib.escape(c["name"]))
+        for c in companies if fs.dart_link(c.get("latest_rcept_no") or "")
+    )
 
     st.markdown(
         '<div class="fs-result-head">'
-        '<div class="fs-eyebrow">ANALYSIS RESULT</div>'
         '<div class="fs-result-title">%s</div>'
-        '<div class="fs-chips">%s</div>'
-        '</div>' % ("".join(names), "".join(chips)),
+        '<div class="fs-result-meta">%s%s</div>'
+        '</div>' % (title, meta, links),
         unsafe_allow_html=True,
     )
 
@@ -845,61 +855,71 @@ def disclosure_headline(company):
         sub = "심각 %d건 · 주의 %d건" % (severe, caution)
         accent = "#B91C1C" if severe else "#B45309"
         return "%d건" % len(matches), sub, accent
-    return "조회 실패", (data.get("error") or "")[:60] or "공시검색 API 호출 실패", "#64748B"
+    return "조회 실패", (data.get("error") or "")[:60] or "공시검색 API 호출 실패", "#6B7280"
+
+
+def metric_block(label, value, note="", note_color=""):
+    """요약 카드 안 숫자 하나 — 라벨(작게) / 숫자(크게) / 한 줄 설명(작게)."""
+    note_style = ' style="color:%s"' % note_color if note_color else ""
+    note_html = '<div class="fs-metric-note"%s>%s</div>' % (note_style, note) if note else ""
+    return ('<div class="fs-metric"><div class="fs-metric-lbl">%s</div>'
+            '<div class="fs-metric-val">%s</div>%s</div>' % (label, value, note_html))
 
 
 def render_summary(analysis):
+    """상단 요약 — 기업별 핵심 숫자 4개와 원문 링크만 남긴다."""
     companies = analysis["companies"]
     years = analysis["years"]
     latest = years[-1]
 
-    for company_index, company in enumerate(companies):
-        if len(companies) > 1:
-            st.markdown(
-                '<div class="fs-company-tag"><i style="background:%s"></i>%s</div>'
-                % (PALETTE[company_index % 2], company["name"]),
-                unsafe_allow_html=True,
-            )
+    for company in companies:
         risk = company["risk"]
         light, grade_label, grade_color, _bg = STATE_STYLE[risk["grade"]]
-        d_value, d_sub, d_accent = disclosure_headline(company)
+        d_value, d_sub, _d_accent = disclosure_headline(company)
         revenue = account_amount(company, latest, "revenue")
         revenue_growth = ratio_of(company, latest, "revenue_growth")
         op_margin = ratio_of(company, latest, "op_margin")
         prev_margin = ratio_of(company, years[-2], "op_margin") if len(years) >= 2 else None
         margin_diff = (op_margin - prev_margin) if (op_margin is not None and prev_margin is not None) else None
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.markdown(
-            card(
-                "5대 리스크 종합 점수",
-                "%d점 %s" % (risk["score"], light),
-                "%s · 평가 %d/5 항목 (N/A %d개 제외)"
-                % (grade_label, risk["available_count"], 5 - risk["available_count"]),
-                grade_color,
-                bar=risk["score"],
-            ),
+        # 리스크는 위험 신호(🔴/🟡)에만 색을 준다. 안전은 무채색.
+        risky = risk["grade"] in ("danger", "caution")
+        risk_note = ("%s %s" % (light, grade_label)) if risky else grade_label
+        disclosure_note = d_sub if (company.get("disclosure") or {}).get("status") == "ok" else ""
+
+        links = statements_of(company, latest)
+        url = links.get("income") or links.get("main") or ""
+        if url:
+            label = fs.statement_link_label(links, "income")
+            source = ('<a class="fs-mini-link" href="%s" target="_blank" rel="noopener noreferrer" '
+                      'title="%s">%d 원문 ↗</a>'
+                      % (html_lib.escape(url, quote=True),
+                         html_lib.escape("%d %s 원문 열기" % (latest, label), quote=True),
+                         latest))
+        else:
+            source = ""
+
+        grid = "".join([
+            metric_block("%d년 리스크" % latest, "%d점" % risk["score"], risk_note,
+                         grade_color if risky else ""),
+            metric_block("%d년 매출액" % latest, human_won(revenue),
+                         "전년 대비 %s" % (num(revenue_growth, 1, "%") if revenue_growth is not None else "-")),
+            metric_block("영업이익률", pct(op_margin),
+                         "전년 대비 %s" % (num(margin_diff, 1, "%p") if margin_diff is not None else "-")),
+            metric_block("최근 1년 공시 위험", d_value, disclosure_note),
+        ])
+
+        st.markdown(
+            '<div class="fs-summary">'
+            '<div class="fs-summary-head">'
+            '<div class="fs-summary-name">%s<span class="fs-summary-code">%s</span></div>'
+            '%s</div>'
+            '<div class="fs-summary-grid">%s</div>'
+            '</div>' % (html_lib.escape(company["name"]), html_lib.escape(company.get("stock_code") or ""),
+                        source, grid),
             unsafe_allow_html=True,
         )
-        col2.markdown(card("최근 1년 공시 위험", d_value, d_sub, d_accent), unsafe_allow_html=True)
-        col3.markdown(
-            card(
-                "%d년 매출액" % latest,
-                human_won(revenue),
-                "전년 대비 %s" % (num(revenue_growth, 1, "%") if revenue_growth is not None else "-"),
-                "#2563EB",
-            ),
-            unsafe_allow_html=True,
-        )
-        col4.markdown(
-            card(
-                "%d년 영업이익률" % latest,
-                pct(op_margin),
-                "전년 대비 %s" % (num(margin_diff, 1, "%p") if margin_diff is not None else "-"),
-                "#0EA5E9",
-            ),
-            unsafe_allow_html=True,
-        )
+    st.write("")
 
 
 def render_disclosure_alert(companies):
@@ -921,15 +941,15 @@ def render_disclosure_alert(companies):
             for m in ((company.get("disclosure") or {}).get("matches") or [])
         )
         st.markdown(
-            '<div class="fs-alert%s"><b>⚠️ 공시 위험 알림</b> — 최근 1년 공시 제목에서 위험 키워드가 잡혔습니다: %s. '
-            '정정공시·종속회사 공시일 수 있으니 <b>③ 리스크 상세 &amp; DART 원문</b> 탭에서 원문을 확인하세요. '
-            '(공시 위험은 5대 리스크 점수에 반영하지 않습니다)</div>' % (" danger" if danger else "", ", ".join(hits)),
+            '<div class="fs-alert%s"><b>공시 위험 알림</b> — %s. '
+            '<b>③ 리스크 상세</b> 탭에서 원문을 확인하세요.</div>'
+            % (" danger" if danger else "", ", ".join(hits)),
             unsafe_allow_html=True,
         )
     elif failures:
         st.markdown(
-            '<div class="fs-alert info"><b>ℹ️ 공시 위험 조회 실패</b> — %s의 공시 목록을 가져오지 못했습니다. '
-            '재무 분석은 그대로 진행되었습니다.</div>' % ", ".join(failures),
+            '<div class="fs-alert info"><b>공시 위험 조회 실패</b> — %s. 재무 분석은 그대로 진행되었습니다.</div>'
+            % ", ".join(failures),
             unsafe_allow_html=True,
         )
 
@@ -967,10 +987,91 @@ def show_table(df, digits=1, height=None):
 
 def table_financials(companies, years, rows, title="재무제표 (단위: 억원)"):
     st.markdown("**%s**" % title)
-    df = build_table(companies, years, rows,
-                     lambda company, year, key: row_eok(account_amount(company, year, key)))
-    show_table(df, digits=0)
-    st.caption("단위: 억원 · 연결재무제표 우선(없으면 별도) · 사업보고서(연간) 기준")
+    st.markdown(financial_table_html(companies, years, rows), unsafe_allow_html=True)
+    st.caption("단위 억원 · 숫자를 클릭하면 그 해 DART 원문이 새 탭으로 열립니다")
+
+
+# ---------------------------------------------------------------------------
+# 6-1. 계정 표 — 숫자를 클릭하면 그 해 DART 재무제표 원문이 새 탭으로 열린다
+# ---------------------------------------------------------------------------
+
+# 계정 → 어느 재무제표 원문(손익계산서 / 재무상태표 / 현금흐름표)으로 보낼지
+ACCOUNT_STATEMENT = {
+    "revenue": "income", "op_income": "income", "net_income": "income",
+    "cost_of_sales": "income", "interest_expense": "income",
+    "assets": "balance", "current_assets": "balance", "liabilities": "balance",
+    "current_liab": "balance", "equity": "balance", "retained_earnings": "balance",
+    "receivables": "balance", "inventory": "balance", "payables": "balance",
+    "op_cash_flow": "cashflow",
+}
+
+
+def statements_of(company, year):
+    """그 해 DART 재무제표 원문 링크 묶음 (없으면 빈 dict)."""
+    if not company:
+        return {}
+    links = (company.get("statement_links") or {}).get(year)
+    if links:
+        return links
+    return ((company.get("years") or {}).get(year) or {}).get("statement_links") or {}
+
+
+def statement_target(company, year, key):
+    """계정 키 → (원문 URL, 툴팁). 링크를 만들 수 없으면 ('', '')."""
+    kind = ACCOUNT_STATEMENT.get(key, "income")
+    links = statements_of(company, year)
+    url = links.get(kind) or links.get("main") or ""
+    if not url:
+        url = fs.dart_link(((company.get("years") or {}).get(year) or {}).get("rcept_no") or "")
+    if not url:
+        return "", ""
+    return url, "%d %s 원문 열기" % (year, fs.statement_link_label(links, kind))
+
+
+def statement_anchor(company, year, key, text):
+    """숫자 하나를 원문 링크로 감싼다. 링크가 없으면 숫자만 둔다."""
+    url, tip = statement_target(company, year, key)
+    if not url:
+        return text
+    return ('<a class="fs-num" href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>'
+            % (html_lib.escape(url, quote=True), html_lib.escape(tip, quote=True), text))
+
+
+def financial_table_html(companies, years, rows):
+    """핵심 재무제표·추가 계정 표 — 모든 숫자가 그 해 DART 원문 링크다."""
+    multi = len(companies) > 1
+    head = ['<tr><th class="fs-rowhead">계정 (단위: 억원)</th>']
+    for company in companies:
+        for year in years:
+            links = statements_of(company, year)
+            rcept_no = ((company.get("years") or {}).get(year) or {}).get("rcept_no") or ""
+            main_url = links.get("main") or fs.dart_link(rcept_no)
+            name = "%s %d" % (company["name"], year) if multi else "%d" % year
+            if main_url:
+                tip = "%d %s 사업보고서 원문 열기" % (year, company["name"])
+                head.append('<th><a class="fs-year" href="%s" target="_blank" '
+                            'rel="noopener noreferrer" title="%s">%s</a></th>'
+                            % (html_lib.escape(main_url, quote=True),
+                               html_lib.escape(tip, quote=True), html_lib.escape(name)))
+            else:
+                head.append("<th>%s</th>" % html_lib.escape(name))
+    head.append("</tr>")
+
+    body = []
+    for key, label in rows:
+        cells = ['<th scope="row">%s</th>' % html_lib.escape(label)]
+        for company in companies:
+            for year in years:
+                value = row_eok(account_amount(company, year, key))
+                if value is None:
+                    cells.append('<td><span class="fs-na">-</span></td>')
+                else:
+                    cells.append('<td>%s</td>' % statement_anchor(
+                        company, year, key, "{:,.0f}".format(value)))
+        body.append("<tr>" + "".join(cells) + "</tr>")
+
+    return ('<table class="fs-fintable"><thead>' + "".join(head) + "</thead><tbody>"
+            + "".join(body) + "</tbody></table>")
 
 
 def table_ratios(companies, years):
@@ -978,7 +1079,7 @@ def table_ratios(companies, years):
             for key, label, _unit, group in fs.RATIO_LABELS]
     df = build_table(companies, years, rows, ratio_of)
     show_table(df, digits=1)
-    st.caption("단위: % · 성장률은 전년 대비(YoY) · 첫 연도 성장률은 전년 데이터가 없어 비어 있습니다")
+    st.caption("단위 % · 성장률은 전년 대비")
 
 
 def table_dupont(companies, years):
@@ -992,10 +1093,7 @@ def table_dupont(companies, years):
     df = build_table(companies, years, rows,
                      lambda company, year, key: (company["years"][year].get("dupont") or {}).get(key))
     show_table(df, digits=2)
-    st.caption(
-        "총자산회전율 = 매출액 ÷ **기말** 자산총계 · 재무레버리지 = 자산총계 ÷ 자본총계 · "
-        "DuPont ROE = 순이익률 × 총자산회전율 × 재무레버리지 (단순 ROE와 0.01%p 이내로 일치해야 정상)"
-    )
+    st.caption("총자산회전율은 기말 자산 기준 · DuPont ROE는 단순 ROE와 0.01%p 이내로 일치해야 정상")
 
 
 def table_ccc(companies, years):
@@ -1008,7 +1106,7 @@ def table_ccc(companies, years):
     df = build_table(companies, years, rows,
                      lambda company, year, key: (company["years"][year].get("ccc") or {}).get(key))
     show_table(df, digits=0)
-    st.caption("기말잔액·365일 기준 · 매출원가·재고자산 등이 공시되지 않은 회사(금융업 등)는 비어 있습니다")
+    st.caption("기말잔액 · 365일 기준 · 금융업 등은 비어 있을 수 있습니다")
 
 
 def table_risk(company):
@@ -1053,8 +1151,9 @@ def style_fig(fig, height=380, legend=True):
         height=height,
         # 범례를 차트 아래로 내리고 위·아래 여백을 넓혀 소제목("매출액 추이" 등)과 겹치지 않게 한다.
         margin=dict(l=10, r=14, t=58, b=84),
-        font=dict(family="Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif",
-                  size=12, color="#334155"),
+        font=dict(family="'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, "
+                         "'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif",
+                  size=12, color="#374151"),
         hoverlabel=dict(bgcolor="white", font_size=12),
         plot_bgcolor="white",
         bargap=0.28,
@@ -1062,9 +1161,9 @@ def style_fig(fig, height=380, legend=True):
     if legend:
         fig.update_layout(legend=dict(orientation="h", yanchor="top", y=-0.22, x=0,
                                       font=dict(size=11), bgcolor="rgba(0,0,0,0)"))
-    fig.update_xaxes(showgrid=False, linecolor="#E2E8F0")
+    fig.update_xaxes(showgrid=False, linecolor="#E5E7EB")
     # 억원 단위 값이 '3.5M' 같은 축약 표기 대신 '3,500,000'으로 보이게 한다.
-    fig.update_yaxes(gridcolor="#EEF2F6", zerolinecolor="#CBD5E1",
+    fig.update_yaxes(gridcolor="#EEF2F6", zerolinecolor="#D1D5DB",
                      tickformat=",", exponentformat="none", separatethousands=True)
     return fig
 
@@ -1081,13 +1180,13 @@ def chart_income(companies, years):
 
         fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.13,
                             subplot_titles=("매출액 (억원)", "영업이익 · 당기순이익 (억원)"))
-        fig.add_trace(go.Bar(x=xs, y=revenue, name="매출액", marker_color="#2563EB",
+        fig.add_trace(go.Bar(x=xs, y=revenue, name="매출액", marker_color="#111827",
                              text=text_labels(revenue), textposition="outside",
                              cliponaxis=False), row=1, col=1)
-        fig.add_trace(go.Bar(x=xs, y=op_income, name="영업이익", marker_color="#0EA5E9",
+        fig.add_trace(go.Bar(x=xs, y=op_income, name="영업이익", marker_color="#4F46E5",
                              text=text_labels(op_income), textposition="outside",
                              cliponaxis=False), row=1, col=2)
-        fig.add_trace(go.Bar(x=xs, y=net_income, name="당기순이익", marker_color="#94A3B8",
+        fig.add_trace(go.Bar(x=xs, y=net_income, name="당기순이익", marker_color="#9CA3AF",
                              text=text_labels(net_income), textposition="outside",
                              cliponaxis=False), row=1, col=2)
         fig.update_layout(barmode="group")
@@ -1120,12 +1219,12 @@ def chart_balance(company, years):
     debt_ratio = [ratio_of(company, y, "debt_ratio") for y in years]
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(go.Bar(x=xs, y=liabilities, name="부채총계", marker_color="#F87171"))
-    fig.add_trace(go.Bar(x=xs, y=equity, name="자본총계", marker_color="#60A5FA"))
+    fig.add_trace(go.Bar(x=xs, y=liabilities, name="부채총계", marker_color="#D1D5DB"))
+    fig.add_trace(go.Bar(x=xs, y=equity, name="자본총계", marker_color="#6B7280"))
     fig.add_trace(
         go.Scatter(x=xs, y=debt_ratio, name="부채비율 (%)", mode="lines+markers+text",
                    text=text_labels(debt_ratio, 1, "%"), textposition="top center",
-                   line=dict(color="#0F172A", width=2.5, dash="dash"), marker=dict(size=8)),
+                   line=dict(color="#111827", width=2.5, dash="dash"), marker=dict(size=8)),
         secondary_y=True)
     fig.update_layout(barmode="stack", title=dict(text="자산 구성과 부채비율", x=0.01, font=dict(size=13)))
     fig.update_yaxes(title_text="억원", secondary_y=False)
@@ -1172,10 +1271,10 @@ def chart_dupont(company, years):
                         subplot_titles=("① 수익성 — 순이익률 (%)", "② 효율성 — 총자산회전율 (회)",
                                         "③ 레버리지 — 재무레버리지 (배)", "ROE = ① × ② × ③ (%)"))
     panels = [
-        (net_margin, "#2563EB", 1, 1, 1, "%"),
-        (turnover, "#10B981", 1, 2, 2, "회"),
-        (multiplier, "#F97316", 2, 1, 2, "배"),
-        (roe, "#7C3AED", 2, 2, 1, "%"),
+        (net_margin, "#4F46E5", 1, 1, 1, "%"),
+        (turnover, "#6B7280", 1, 2, 2, "회"),
+        (multiplier, "#9CA3AF", 2, 1, 2, "배"),
+        (roe, "#111827", 2, 2, 1, "%"),
     ]
     for values, color, row, col, digits, suffix in panels:
         fig.add_trace(go.Bar(x=xs, y=values, name=suffix, marker_color=color, showlegend=False,
@@ -1190,14 +1289,14 @@ def chart_dupont_gap(gap):
     rows = gap["rows"]
     labels = [row["label"] for row in rows] + ["ROE 격차 합계"]
     values = [row["contribution"] for row in rows] + [gap["total"]]
-    colors = ["#2563EB" if v >= 0 else "#DC2626" for v in values]
+    colors = ["#4F46E5" if v >= 0 else "#9CA3AF" for v in values]
 
     fig = go.Figure(go.Bar(
         x=values, y=labels, orientation="h", marker_color=colors,
         text=["%+.1f%%p" % v for v in values], textposition="outside", cliponaxis=False,
     ))
     fig.update_layout(title=dict(text="ROE 격차 요인 분해 (순차 대체법)", x=0.01, font=dict(size=13)))
-    fig.update_xaxes(title_text="ROE 기여도 (%p)", zeroline=True, zerolinecolor="#94A3B8")
+    fig.update_xaxes(title_text="ROE 기여도 (%p)", zeroline=True, zerolinecolor="#9CA3AF")
     return style_fig(fig, height=330, legend=False)
 
 
@@ -1213,16 +1312,16 @@ def chart_ccc(companies, years):
             return [(company["years"][y].get("ccc") or {}).get(key) for y in years]
 
         dso, dio, dpo, ccc = series("dso"), series("dio"), series("dpo"), series("ccc")
-        fig.add_trace(go.Bar(x=xs, y=dso, name="DSO (매출채권 회수)", marker_color="#60A5FA"))
-        fig.add_trace(go.Bar(x=xs, y=dio, name="DIO (재고 보유)", marker_color="#34D399"))
+        fig.add_trace(go.Bar(x=xs, y=dso, name="DSO (매출채권 회수)", marker_color="#6B7280"))
+        fig.add_trace(go.Bar(x=xs, y=dio, name="DIO (재고 보유)", marker_color="#9CA3AF"))
         fig.add_trace(go.Bar(x=xs, y=[None if v is None else -v for v in dpo],
-                             name="DPO (매입채무 지급)", marker_color="#FBBF24",
+                             name="DPO (매입채무 지급)", marker_color="#D1D5DB",
                              customdata=dpo,
                              hovertemplate="DPO %{customdata:.0f}일<extra></extra>"))
         fig.add_trace(go.Scatter(
             x=xs, y=ccc, name="CCC (현금전환주기)", mode="lines+markers+text",
             text=text_labels(ccc, 0, "일"), textposition="top center",
-            line=dict(color="#0F172A", width=3), marker=dict(size=9)))
+            line=dict(color="#111827", width=3), marker=dict(size=9)))
         fig.update_layout(barmode="relative",
                           title=dict(text="DSO + DIO − DPO = CCC (일)", x=0.01, font=dict(size=13)))
         fig.update_yaxes(title_text="일")
@@ -1250,24 +1349,16 @@ def render_tab1(analysis):
     companies, years = analysis["companies"], analysis["years"]
     single = len(companies) == 1
 
-    section_title("📋 핵심 재무제표", "매출·영업이익·순이익과 재무상태(자산·부채·자본)를 연도별로 봅니다.")
-    table_financials(companies, years, CORE_ROWS, title="핵심 재무제표 (단위: 억원)")
-
-    with st.expander("추가 계정 보기 (운전자본·현금흐름·이자비용)"):
-        table_financials(companies, years, EXTRA_ROWS, title="추가 계정 (단위: 억원)")
-        st.caption("CCC(운전자본)와 5대 리스크 진단에 쓰이는 계정입니다. 공시되지 않은 계정은 비어 있습니다.")
-
-    section_title("📈 추이 차트", "막대·선을 눌러 값을 확인하세요. 범례를 클릭하면 계열을 켜고 끌 수 있습니다.")
+    section_title("핵심 재무제표")
+    table_financials(companies, years, CORE_ROWS, title="핵심 재무제표")
     st.plotly_chart(chart_income(companies, years))
-
-    if single:
-        st.plotly_chart(chart_balance(companies[0], years))
-
-    section_title("🧮 7대 재무비율", "수익성 3 · 안정성 2 · 성장성 2 — 업종 평균이 아니라 같은 회사의 시간 변화를 보는 지표입니다.")
-    table_ratios(companies, years)
-
     st.plotly_chart(chart_ratios(companies, years))
-    if not single:
+
+    with st.expander("추가 계정 · 세부 차트 보기"):
+        table_financials(companies, years, EXTRA_ROWS, title="추가 계정 (단위: 억원)")
+        if single:
+            st.plotly_chart(chart_balance(companies[0], years))
+        table_ratios(companies, years)
         for company in companies:
             quote_box("<b>%s</b> · %s" % (company["name"], company["dupont_comment"]))
 
@@ -1282,7 +1373,7 @@ def render_tab1(analysis):
             "| 유동비율 | 유동자산 ÷ 유동부채 × 100 | 100% 미만이면 단기 지급 부담 |\n"
             "| 매출액·영업이익 증가율 | (당기 − 전기) ÷ \\|전기\\| × 100 | 전기가 적자면 부호가 뒤집히지 않게 절댓값으로 나눔 |\n"
         )
-        st.caption("ROE는 기말 자본 기준입니다. 기업분석 보고서의 (기초+기말)/2 평균자본 기준과는 값이 조금 다를 수 있습니다.")
+        st.caption("ROE는 기말 자본 기준입니다. (기초+기말)/2 평균자본 기준과는 값이 조금 다를 수 있습니다.")
 
 
 # ---------------------------------------------------------------------------
@@ -1293,32 +1384,28 @@ def render_dupont_block(analysis):
     companies, years = analysis["companies"], analysis["years"]
     latest = years[-1]
 
-    section_title(
-        "🔺 DuPont ROE 3단계 분해",
-        "ROE 한 줄로는 ‘빚으로 올린 ROE’와 ‘이익을 많이 남겨서 올린 ROE’를 구분할 수 없습니다. "
-        "ROE = 순이익률 × 총자산회전율 × 재무레버리지 로 쪼개서 어디서 나온 수익인지 봅니다. "
-        "<b>총자산회전율은 매출액 ÷ 기말 자산총계</b>(평균잔액 아님) 기준입니다.",
-    )
+    section_title("DuPont ROE 3단계 분해",
+                  "ROE = 순이익률 × 총자산회전율 × 재무레버리지 (기말 잔액 기준)")
 
     if len(companies) == 1:
         company = companies[0]
         dupont = company["years"][latest].get("dupont") or {}
         columns = st.columns(5)
         columns[0].markdown(
-            card("① 순이익률", pct(dupont.get("net_margin")), "매출 100원당 최종이익", "#2563EB"),
+            card("① 순이익률", pct(dupont.get("net_margin")), "매출 100원당 최종이익", "#4F46E5"),
             unsafe_allow_html=True)
         columns[1].markdown(
-            card("② 총자산회전율", num(dupont.get("asset_turnover"), 2, "회"), "기말 자산 1원이 만든 매출", "#10B981"),
+            card("② 총자산회전율", num(dupont.get("asset_turnover"), 2, "회"), "기말 자산 1원이 만든 매출", "#6B7280"),
             unsafe_allow_html=True)
         columns[2].markdown(
-            card("③ 재무레버리지", num(dupont.get("equity_multiplier"), 2, "배"), "자기자본 1원에 대응하는 자산", "#F97316"),
+            card("③ 재무레버리지", num(dupont.get("equity_multiplier"), 2, "배"), "자기자본 1원에 대응하는 자산", "#9CA3AF"),
             unsafe_allow_html=True)
         columns[3].markdown(
-            card("DuPont ROE", pct(dupont.get("roe")), "① × ② × ③", "#7C3AED"),
+            card("DuPont ROE", pct(dupont.get("roe")), "① × ② × ③", "#111827"),
             unsafe_allow_html=True)
         columns[4].markdown(
             card("검산 (단순 ROE)", pct(dupont.get("roe_simple")),
-                 "차이 %s" % num(dupont.get("diff"), 2, "%p"), "#64748B"),
+                 "차이 %s" % num(dupont.get("diff"), 2, "%p"), "#D1D5DB"),
             unsafe_allow_html=True)
         st.write("")
         if dupont.get("roe") is None:
@@ -1335,11 +1422,8 @@ def render_dupont_block(analysis):
     gap = analysis.get("dupont_gap")
     if gap:
         st.plotly_chart(chart_dupont_gap(gap))
-        st.caption(
-            "왼쪽 회사(%s) 기준으로 오른쪽 회사(%s)의 요인을 하나씩 대입한 결과입니다. "
-            "막대가 (+)면 오른쪽 회사가 그 요인에서 ROE를 더 높인 것이고, 세 기여도의 합이 ROE 격차와 같습니다."
-            % (gap["a"], gap["b"])
-        )
+        st.caption("%s 기준으로 %s의 요인을 하나씩 대입한 결과입니다. 세 기여도의 합이 ROE 격차와 같습니다."
+                   % (gap["a"], gap["b"]))
         quote_box(gap["text"])
     else:
         st.info("두 회사 모두 DuPont 요인(매출액·순이익·자산·자본)이 있어야 격차 분해를 계산할 수 있습니다. "
@@ -1351,12 +1435,8 @@ def render_dupont_block(analysis):
 def render_ccc_block(analysis):
     companies, years = analysis["companies"], analysis["years"]
 
-    section_title(
-        "🔄 운전자본 · 현금전환주기(CCC)",
-        "DSO(매출채권 회수일) + DIO(재고 보유일) − DPO(매입채무 지급일) = CCC. "
-        "현금이 사업 안에 묶여 있는 기간이라 <b>짧을수록 운전자본 부담이 작습니다</b>. "
-        "분자는 모두 기말잔액 기준입니다.",
-    )
+    section_title("운전자본 · 현금전환주기(CCC)",
+                  "DSO + DIO − DPO = CCC · 짧을수록 운전자본 부담이 작습니다")
     has_ccc = any(
         ((company["years"][year].get("ccc") or {}).get("ccc") is not None)
         for company in companies for year in years
@@ -1420,10 +1500,10 @@ def render_disclosure(company):
 
     if status == "ok":
         severe = sum(1 for m in matches if m["severity"] == "severe")
-        st.warning("⚠️ 최근 1년 공시에서 위험 키워드 **%d건**이 잡혔습니다 (심각 %d · 주의 %d)."
+        st.warning("최근 1년 공시에서 위험 키워드 **%d건** (심각 %d · 주의 %d)"
                    % (len(matches), severe, len(matches) - severe))
     elif status == "clear":
-        st.success("🟢 최근 1년 공시에서 위험 키워드가 잡히지 않았습니다.")
+        st.caption("최근 1년 공시에서 위험 키워드가 잡히지 않았습니다.")
     else:
         st.error("공시 위험 조회에 실패했습니다 — %s" % (data.get("error") or "알 수 없는 오류"))
         st.caption("비재무 참고 정보라 재무 분석은 그대로 진행됩니다. 잠시 후 다시 실행해 보세요.")
@@ -1432,7 +1512,7 @@ def render_disclosure(company):
     if coverage:
         st.caption("조회 범위: %s · 기간 %s" % (coverage, data.get("period", "")))
     if data.get("truncated"):
-        st.caption("⚠️ API 페이지 상한(%d페이지)에 걸려 최근 공시 일부만 확인했습니다." % fs.DISCLOSURE_MAX_PAGES)
+        st.caption("API 페이지 상한(%d페이지)까지만 확인했습니다." % fs.DISCLOSURE_MAX_PAGES)
 
     if matches:
         rows = []
@@ -1453,11 +1533,7 @@ def render_disclosure(company):
             pd.DataFrame(rows), hide_index=True,
             column_config={"원문": st.column_config.LinkColumn("원문", display_text="DART에서 열기")},
         )
-        st.caption(
-            "키워드 필터 결과입니다 — 정정공시는 같은 사건이 여러 건으로 늘어나고, "
-            "‘종속회사’가 붙은 공시는 모회사가 아닌 연결 종속회사의 사건일 수 있습니다. "
-            "이 항목은 5대 리스크 점수에 반영하지 않습니다."
-        )
+        st.caption("정정공시는 같은 사건이 여러 건으로 늘어나고, ‘종속회사’ 공시는 종속회사 사건일 수 있습니다.")
 
 
 def risk_compare_table(companies):
@@ -1475,9 +1551,8 @@ def risk_compare_table(companies):
 def render_tab3(analysis):
     companies, years = analysis["companies"], analysis["years"]
 
-    section_title("🚦 5대 리스크 상세",
-                  "항목당 20점(🟢 20 / 🟡 10 / 🔴 0), 데이터가 없는 항목은 분모에서 빼고 100점으로 환산합니다. "
-                  "85점 이상 🟢 안전 · 60점 이상 🟡 주의 · 60점 미만 🔴 위험.")
+    section_title("5대 리스크 상세",
+                  "항목당 20점 · 데이터 없는 항목은 분모에서 제외 · 85점 이상 안전 / 60점 이상 주의 / 60점 미만 위험")
     for index, company in enumerate(companies):
         risk = company["risk"]
         if len(companies) > 1:
@@ -1499,9 +1574,7 @@ def render_tab3(analysis):
         risk_compare_table(companies)
 
     st.divider()
-    section_title("📰 최근 1년 공시 위험 탐지",
-                  "공시 제목(report_nm)에 소송·횡령·감사의견·유상증자 같은 키워드가 있는지 봅니다. "
-                  "대기업은 1년 공시가 수천 건이라 페이지를 끝까지 넘겨 조회합니다.")
+    section_title("최근 1년 공시 위험", "공시 제목의 위험 키워드 탐지 · 리스크 점수에는 반영하지 않습니다")
     for company in companies:
         if len(companies) > 1:
             st.markdown("**%s**" % company["name"])
@@ -1509,8 +1582,7 @@ def render_tab3(analysis):
         st.write("")
 
     st.divider()
-    section_title("📄 사업보고서 원문 (DART)",
-                  "모든 수치의 출처입니다. 표의 링크를 누르면 DART 원문 뷰어가 열립니다.")
+    section_title("사업보고서 원문", "표의 링크를 누르면 DART 원문이 새 탭으로 열립니다")
     for company in companies:
         if len(companies) > 1:
             st.markdown("**%s** — %s" % (company["name"], company.get("fs_nm") or "-"))
@@ -1551,7 +1623,8 @@ def render_results(analysis):
     render_result_head(analysis)
     render_summary(analysis)
     render_disclosure_alert(analysis["companies"])
-    st.markdown(DISCLAIMER_TMPL, unsafe_allow_html=True)
+    with st.expander("ⓘ 분석 기준 및 한계 보기"):
+        st.markdown(DISCLAIMER_TMPL, unsafe_allow_html=True)
     st.write("")
 
     tab1, tab2, tab3 = st.tabs([
@@ -1569,15 +1642,11 @@ def render_results(analysis):
     st.divider()
     footer_left, footer_middle, footer_right = st.columns([1, 1.1, 1])
     with footer_middle:
-        if st.button("↺ 다른 기업 분석하기", use_container_width=True, key="fs2_reset"):
+        if st.button("다른 기업 분석하기", use_container_width=True, key="fs2_reset"):
             st.session_state.pop("fs2_params", None)
             st.session_state["fs2_scroll"] = False
             st.rerun()
-    st.caption(
-        "데이터: 금융감독원 전자공시시스템(DART) Open API · 엔진: analyzer.py · "
-        "모든 수치는 결정론적 Python 규칙으로 계산합니다(LLM 추론 미사용) · "
-        "학습·포트폴리오 목적의 1차 스크리닝 도구이며 투자 권유가 아닙니다."
-    )
+    st.caption("데이터: 금융감독원 OpenDART · 계산: 결정론적 Python 규칙 · 투자 권유가 아닙니다.")
 
 
 # ---------------------------------------------------------------------------
@@ -1585,7 +1654,7 @@ def render_results(analysis):
 # ---------------------------------------------------------------------------
 
 def render_change_notice(settings, saved):
-    st.info("설정이 바뀌었습니다. **🔎 분석 실행**을 누르면 이 설정으로 다시 분석합니다. "
+    st.info("설정이 바뀌었습니다. **분석 실행**을 누르면 이 설정으로 다시 분석합니다. "
             "지금 아래 결과는 직전 설정(%s · %s~%s)의 것입니다."
             % (" vs ".join(c["corp_name"] for c in saved["corps"]),
                saved["years"][0], saved["years"][-1]))

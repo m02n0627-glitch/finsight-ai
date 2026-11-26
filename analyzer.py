@@ -35,6 +35,7 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
 import time
 import unicodedata
@@ -534,6 +535,26 @@ RATIO_LABELS = [
 # DART 원문 뷰어 주소: rcpNo(접수번호)만 있으면 사업보고서 원문이 바로 열린다.
 DART_VIEWER = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=%s"
 
+# 재무제표 한 장 직행 주소 (4-2 절에서 만든다) · 기본 조회 제한 시간 · 실행 중 캐시
+DART_MAIN_DOC = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=%s"
+DART_VIEWER_DOC = (
+    "https://dart.fss.or.kr/report/viewer.do"
+    "?rcpNo=%s&dcmNo=%s&eleId=%s&offset=%s&length=%s&dtd=%s"
+)
+STATEMENT_LINKS_TIMEOUT = 15          # main.do HTML 조회 제한 시간(초)
+_STATEMENT_LINKS_CACHE = {}           # rcept_no → statement_links (한 실행 안에서 재사용)
+
+# 계정 표의 숫자를 어느 재무제표 원문으로 보낼지 (UI가 쓴다)
+STATEMENT_KIND_LABEL = {"income": "손익계산서", "balance": "재무상태표", "cashflow": "현금흐름표"}
+
+# 목차에서 찾을 재무제표 이름 — 앞에 있을수록 우선(연결 → 별도)
+STATEMENT_NAME_PRIORITY = (
+    ("income", ("연결손익계산서", "연결포괄손익계산서", "손익계산서", "포괄손익계산서")),
+    ("balance", ("연결재무상태표", "재무상태표")),
+    ("cashflow", ("연결현금흐름표", "현금흐름표")),
+)
+STATEMENT_SECTION_FALLBACK = "연결재무제표"   # 한 장씩 못 찾으면 이 목차(연결재무제표 전체)로
+
 # CCC 계산에 쓰는 네 가지 계정 (계산 불가 안내 문구에 그대로 쓴다)
 CCC_INPUTS = [
     ("cost_of_sales", "매출원가"),
@@ -562,6 +583,165 @@ def rcept_date(rcept_no):
     if len(digits) != 8 or not digits.isdigit():
         return ""
     return "%s-%s-%s" % (digits[:4], digits[4:6], digits[6:])
+
+
+# ---------------------------------------------------------------------------
+# 4-2. DART 재무제표 원문 직행 링크 (report/viewer.do)
+# ---------------------------------------------------------------------------
+#
+# DART 사업보고서 뷰어(main.do?rcpNo=…)의 목차는 JavaScript 안에
+#     node3['text']  = "2-1. 연결 재무상태표";
+#     node3['rcpNo'] = "20260310002820";
+#     node3['dcmNo'] = "11104488";
+#     node3['eleId'] = "20";  node3['offset'] = "376968";
+#     node3['length'] = "55064";  node3['dtd'] = "dart4.xsd";
+# 처럼 들어 있다(브라우저의 viewDoc() 이 쓰는 값과 같다).
+# 이 값으로 report/viewer.do 주소를 만들면 사업보고서 전체가 아니라
+# 그 재무제표 한 장이 바로 열린다 → 계정 숫자를 클릭해 원문을 확인할 수 있다.
+#
+# 네트워크·형식이 예상과 다르면 조용히 main.do(보고서 첫 화면)로 물러난다.
+
+def _fetch_dart_html(url, timeout):
+    """DART 화면(HTML)을 그대로 받아 문자열로 돌려준다."""
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (dart-analyzer; educational project)"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+def parse_toc_nodes(html):
+    """
+    main.do HTML의 JavaScript 목차에서 노드(제목 + viewDoc 파라미터)를 뽑는다.
+
+    반환: [{"text": "2-1. 연결 재무상태표", "rcpNo": "...", "dcmNo": "...",
+            "eleId": "20", "offset": "376968", "length": "55064", "dtd": "dart4.xsd"}, ...]
+    """
+    nodes = []
+    if not html:
+        return nodes
+    # 노드 하나가 시작하는 `var nodeN = {};` 지점마다 잘라서 그 안의 필드만 읽는다.
+    # (자식 노드는 다음 `var nodeN = {};` 에서 시작하므로 섞이지 않는다)
+    starts = [match.start() for match in re.finditer(r"node\w*\s*=\s*\{\s*\}\s*;", html)]
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(html)
+        chunk = html[start:end]
+        fields = {}
+        for name in ("text", "rcpNo", "dcmNo", "eleId", "offset", "length", "dtd"):
+            match = re.search(
+                r"node\w*\[['\"]%s['\"]\]\s*=\s*(['\"])(.*?)\1\s*;" % name,
+                chunk,
+                re.DOTALL,
+            )
+            if match:
+                fields[name] = match.group(2).strip()
+        if fields.get("text"):
+            nodes.append(fields)
+    return nodes
+
+
+# 목차 제목 앞의 번호("2-1.", "Ⅱ.", "①")를 떼어 낸다.
+_LEADING_TOC_NUMBER = re.compile(r"^[\s0-9\u2160-\u217f\u2460-\u24ff.\-\u2013\u00b7()\[\]]+")
+
+
+def toc_label(text):
+    """'2-1. 연결 재무상태표' → '연결재무상태표' (선행 번호·공백 제거, 비교용)."""
+    return _LEADING_TOC_NUMBER.sub("", (text or "").strip()).replace(" ", "")
+
+
+def viewer_url(node):
+    """목차 노드 → report/viewer.do 직행 주소. 필요한 값이 하나라도 없으면 빈 문자열."""
+    if not node:
+        return ""
+    keys = ("rcpNo", "dcmNo", "eleId", "offset", "length", "dtd")
+    values = [(node.get(key) or "").strip() for key in keys]
+    if not all(values):
+        return ""
+    return DART_VIEWER_DOC % tuple(urllib.parse.quote(value, safe="") for value in values)
+
+
+def _copy_statement_links(links):
+    copied = dict(links)
+    copied["labels"] = dict(links.get("labels") or {})
+    return copied
+
+
+def _empty_statement_links(main_url):
+    return {
+        "income": main_url,
+        "balance": main_url,
+        "cashflow": main_url,
+        "main": main_url,
+        "labels": {kind: "" for kind, _names in STATEMENT_NAME_PRIORITY},
+        "fallback": True,
+    }
+
+
+def fetch_statement_links(rcept_no, timeout=STATEMENT_LINKS_TIMEOUT, use_cache=True):
+    """
+    사업보고서 접수번호 하나의 재무제표 섹션별 원문 직행 링크를 만든다.
+
+    반환: {"income": url, "balance": url, "cashflow": url, "main": url,
+           "labels": {"income": "연결손익계산서", ...}, "fallback": False}
+      · income   : 연결손익계산서 → 연결포괄손익계산서 → 손익계산서 → 포괄손익계산서
+      · balance  : 연결재무상태표 → 재무상태표
+      · cashflow : 연결현금흐름표 → 현금흐름표
+      · 한 장짜리 목차를 못 찾으면 '연결재무제표' 목차 → 그래도 없으면 main.do 첫 화면.
+      · 조회 실패·형식 변경도 예외 없이 main.do 로 물러난다(분석은 계속된다).
+    """
+    rcept_no = (rcept_no or "").strip()
+    main_url = DART_MAIN_DOC % rcept_no if rcept_no else ""
+    if not rcept_no:
+        return _empty_statement_links("")
+    if use_cache:
+        cached = _STATEMENT_LINKS_CACHE.get(rcept_no)
+        if cached is not None:
+            return _copy_statement_links(cached)
+
+    links = _empty_statement_links(main_url)
+    try:
+        html = _fetch_dart_html(main_url, timeout)
+        nodes = parse_toc_nodes(html)
+        labelled = [(toc_label(node.get("text")), node) for node in nodes]
+
+        # (1) 재무제표 한 장씩 — 이름 우선순위(연결 → 별도)대로 첫 노드
+        for kind, names in STATEMENT_NAME_PRIORITY:
+            node = None
+            used_name = ""
+            for name in names:
+                node = next((n for label, n in labelled if label == name), None)
+                if node is not None:
+                    used_name = name
+                    break
+            url = viewer_url(node)
+            if url:
+                links[kind] = url
+                links["labels"][kind] = used_name
+
+        # (2) 못 찾은 종류는 '연결재무제표' 목차로 → 그래도 없으면 main.do 유지
+        if any(links[kind] == main_url for kind, _names in STATEMENT_NAME_PRIORITY):
+            section = next((n for label, n in labelled if label == STATEMENT_SECTION_FALLBACK), None)
+            section_url = viewer_url(section)
+            if section_url:
+                for kind, _names in STATEMENT_NAME_PRIORITY:
+                    if links[kind] == main_url:
+                        links[kind] = section_url
+                        links["labels"][kind] = STATEMENT_SECTION_FALLBACK
+
+        links["fallback"] = any(not links["labels"][kind] for kind, _names in STATEMENT_NAME_PRIORITY)
+    except Exception:
+        # 조용히 main.do 로 물러난다. (원문 링크는 편의 기능이라 분석을 막지 않는다)
+        pass
+
+    _STATEMENT_LINKS_CACHE[rcept_no] = _copy_statement_links(links)
+    return links
+
+
+def statement_link_label(links, kind):
+    """툴팁용 이름: 실제로 찾은 목차 이름, 없으면 '손익계산서' 같은 기본 이름."""
+    label = ((links or {}).get("labels") or {}).get(kind) or ""
+    return label or STATEMENT_KIND_LABEL.get(kind, "재무제표")
 
 
 def fmt(value, digits=1, suffix="%"):
@@ -2610,6 +2790,7 @@ def collect_company(api_key, corp, years, verbose=True):
         "fs_div": None,
         "fs_nm": None,
         "latest_rcept_no": "",
+        "statement_links": {},
     }
     for year in years:
         try:
@@ -2621,6 +2802,11 @@ def collect_company(api_key, corp, years, verbose=True):
                 continue
             raise
         company["years"][year] = {"accounts": accounts, "rcept_no": rcept_no, "fs_div": fs_div}
+        # 재무제표 한 장짜리 DART 원문 직행 링크 (손익계산서·재무상태표·현금흐름표)
+        # 실패해도 main.do 로 물러나므로 이 호출이 분석을 막지 않는다.
+        links = fetch_statement_links(rcept_no)
+        company["years"][year]["statement_links"] = links
+        company["statement_links"][year] = links
         # 리스크 진단용 계정(이자비용·영업활동현금흐름·이익잉여금)을 보강한다.
         # 전체 재무제표 API가 막혀도 본 분석은 계속되도록 결과가 비어도 넘어간다.
         extras = fetch_extra_accounts(api_key, corp["corp_code"], year)
@@ -2662,6 +2848,12 @@ def build_analysis(api_key, corps, years, verbose=True):
 
     for company in companies:
         company["years"] = {y: company["years"][y] for y in years}
+        # 회사·연도별 재무제표 원문 직행 링크 (수집 단계에서 이미 받아 두었고, 없으면 여기서 채운다)
+        company["statement_links"] = {
+            y: company["years"][y].get("statement_links")
+            or fetch_statement_links(company["years"][y].get("rcept_no", ""))
+            for y in years
+        }
         compute_ratios(company["years"], years)
         compute_working_capital(company["years"], years)
         # 5대 리스크 진단 (신호등 + 100점 점수)

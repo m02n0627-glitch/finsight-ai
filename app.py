@@ -21,6 +21,7 @@ analyzer.py(OpenDART 분석 엔진)를 그대로 재사용하고 Streamlit 화�
 """
 
 import contextlib
+import html as html_lib
 import io
 import os
 import sys
@@ -328,6 +329,36 @@ def inject_css():
               display: inline-block; padding: 2px 9px; border-radius: 999px;
               font-size: 11.5px; font-weight: 700; margin-right: 6px;
           }
+          /* 계정 표: 숫자가 DART 원문 링크 */
+          .fs-fintable {
+              width: 100%; border-collapse: collapse; font-size: 13px;
+              font-variant-numeric: tabular-nums; margin: 2px 0 6px 0;
+          }
+          .fs-fintable th, .fs-fintable td {
+              padding: 7px 10px; border-bottom: 1px solid #E2E8F0; white-space: nowrap;
+          }
+          .fs-fintable thead th {
+              background: #F1F5F9; color: #334155; font-size: 12px; font-weight: 800;
+          }
+          .fs-fintable tbody th { text-align: left; font-weight: 600; color: #334155; }
+          .fs-fintable th + th, .fs-fintable td { text-align: right; }
+          .fs-fintable tbody tr:hover { background: #F8FAFC; }
+          .fs-fintable a.fs-num {
+              color: #0F172A; text-decoration: none; border-bottom: 1px dotted #94A3B8;
+          }
+          .fs-fintable a.fs-num:hover { color: #2563EB; border-bottom-color: #2563EB; }
+          .fs-fintable a.fs-num::after {
+              content: "↗"; font-size: 9px; color: #94A3B8; margin-left: 3px; vertical-align: super;
+          }
+          .fs-fintable a.fs-year {
+              color: #475569; text-decoration: none; border-bottom: 1px dotted #CBD5E1;
+          }
+          .fs-fintable a.fs-year:hover { color: #2563EB; }
+          .fs-fintable .fs-na { color: #94A3B8; }
+          .fs-srclinks { margin: -2px 0 10px 2px; font-size: 12.5px; }
+          .fs-srclinks a { color: #2563EB; text-decoration: none; font-weight: 700; }
+          .fs-srclinks a:hover { text-decoration: underline; }
+          .fs-srclinks .fs-sep { color: #CBD5E1; margin: 0 7px; }
           footer { visibility: hidden; }
         </style>
         """,
@@ -540,6 +571,10 @@ def render_summary(analysis):
             ),
             unsafe_allow_html=True,
         )
+        # 요약 카드 아래: 그 해 재무제표 원문 바로가기
+        links_html = summary_source_links(company, latest)
+        if links_html:
+            st.markdown(links_html, unsafe_allow_html=True)
         st.write("")
 
     st.markdown(DISCLAIMER_TMPL, unsafe_allow_html=True)
@@ -581,10 +616,111 @@ def show_table(df, digits=1, height=None):
 
 def table_financials(companies, years, rows, title="재무제표 (단위: 억원)"):
     st.markdown("**%s**" % title)
-    df = build_table(companies, years, rows,
-                     lambda company, year, key: row_eok(account_amount(company, year, key)))
-    show_table(df, digits=0)
-    st.caption("단위: 억원 · 연결재무제표 우선(없으면 별도) · 사업보고서(연간) 기준")
+    st.markdown(financial_table_html(companies, years, rows), unsafe_allow_html=True)
+    st.caption("단위: 억원 · **숫자를 클릭하면 그 해 DART 원문 재무제표가 새 탭으로 열립니다** "
+               "· 연결재무제표 우선(없으면 별도) · 사업보고서(연간) 기준")
+
+
+# ---------------------------------------------------------------------------
+# 6-1. 계정 표 — 숫자를 클릭하면 그 해 DART 재무제표 원문이 새 탭으로 열린다
+# ---------------------------------------------------------------------------
+
+# 계정 → 어느 재무제표 원문(손익계산서 / 재무상태표 / 현금흐름표)으로 보낼지
+ACCOUNT_STATEMENT = {
+    "revenue": "income", "op_income": "income", "net_income": "income",
+    "cost_of_sales": "income", "interest_expense": "income",
+    "assets": "balance", "current_assets": "balance", "liabilities": "balance",
+    "current_liab": "balance", "equity": "balance", "retained_earnings": "balance",
+    "receivables": "balance", "inventory": "balance", "payables": "balance",
+    "op_cash_flow": "cashflow",
+}
+
+
+def statements_of(company, year):
+    """그 해 DART 재무제표 원문 링크 묶음 (없으면 빈 dict)."""
+    if not company:
+        return {}
+    links = (company.get("statement_links") or {}).get(year)
+    if links:
+        return links
+    return ((company.get("years") or {}).get(year) or {}).get("statement_links") or {}
+
+
+def statement_target(company, year, key):
+    """계정 키 → (원문 URL, 툴팁). 링크를 만들 수 없으면 ('', '')."""
+    kind = ACCOUNT_STATEMENT.get(key, "income")
+    links = statements_of(company, year)
+    url = links.get(kind) or links.get("main") or ""
+    if not url:
+        url = fs.dart_link(((company.get("years") or {}).get(year) or {}).get("rcept_no") or "")
+    if not url:
+        return "", ""
+    return url, "%d %s 원문 열기" % (year, fs.statement_link_label(links, kind))
+
+
+def statement_anchor(company, year, key, text):
+    """숫자 하나를 원문 링크로 감싼다. 링크가 없으면 숫자만 둔다."""
+    url, tip = statement_target(company, year, key)
+    if not url:
+        return text
+    return ('<a class="fs-num" href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>'
+            % (html_lib.escape(url, quote=True), html_lib.escape(tip, quote=True), text))
+
+
+def financial_table_html(companies, years, rows):
+    """핵심 재무제표·추가 계정 표 — 모든 숫자가 그 해 DART 원문 링크다."""
+    multi = len(companies) > 1
+    head = ['<tr><th class="fs-rowhead">계정 (단위: 억원)</th>']
+    for company in companies:
+        for year in years:
+            links = statements_of(company, year)
+            rcept_no = ((company.get("years") or {}).get(year) or {}).get("rcept_no") or ""
+            main_url = links.get("main") or fs.dart_link(rcept_no)
+            name = "%s %d" % (company["name"], year) if multi else "%d" % year
+            if main_url:
+                tip = "%d %s 사업보고서 원문 열기" % (year, company["name"])
+                head.append('<th><a class="fs-year" href="%s" target="_blank" '
+                            'rel="noopener noreferrer" title="%s">%s</a></th>'
+                            % (html_lib.escape(main_url, quote=True),
+                               html_lib.escape(tip, quote=True), html_lib.escape(name)))
+            else:
+                head.append("<th>%s</th>" % html_lib.escape(name))
+    head.append("</tr>")
+
+    body = []
+    for key, label in rows:
+        cells = ['<th scope="row">%s</th>' % html_lib.escape(label)]
+        for company in companies:
+            for year in years:
+                value = row_eok(account_amount(company, year, key))
+                if value is None:
+                    cells.append('<td><span class="fs-na">-</span></td>')
+                else:
+                    cells.append('<td>%s</td>' % statement_anchor(
+                        company, year, key, "{:,.0f}".format(value)))
+        body.append("<tr>" + "".join(cells) + "</tr>")
+
+    return ('<table class="fs-fintable"><thead>' + "".join(head) + "</thead><tbody>"
+            + "".join(body) + "</tbody></table>")
+
+
+def summary_source_links(company, year):
+    """요약 카드 아래 한 줄 — 그 해 재무제표 원문 바로가기(손익계산서 먼저)."""
+    links = statements_of(company, year)
+    parts = []
+    for kind in ("income", "balance", "cashflow"):
+        url = links.get(kind) or links.get("main") or ""
+        if not url:
+            continue
+        label = fs.statement_link_label(links, kind)
+        parts.append('<a href="%s" target="_blank" rel="noopener noreferrer" title="%s">'
+                     '📄 %d %s 원문 ↗</a>'
+                     % (html_lib.escape(url, quote=True),
+                        html_lib.escape("%d %s 원문 열기" % (year, label), quote=True),
+                        year, html_lib.escape(label)))
+    if not parts:
+        return ""
+    return '<div class="fs-srclinks">%s</div>' % '<span class="fs-sep">·</span>'.join(parts)
 
 
 def table_ratios(companies, years):

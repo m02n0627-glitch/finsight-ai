@@ -368,3 +368,238 @@ def test_compute_working_capital_two_years():
     assert previous["ccc"] == pytest.approx(57.357143, rel=1e-6)
     # 2024는 위 정상 케이스와 같은 59.3125일
     assert years_data[2024]["ccc"]["ccc"] == pytest.approx(59.3125)
+
+
+# ---------------------------------------------------------------------------
+# DART 원문 직행 링크 (fetch_statement_links) — 네트워크 없이 파싱만 검증
+# ---------------------------------------------------------------------------
+# DART main.do 는 목차를 아래처럼 JavaScript 로 심어 보낸다(실제 응답에서 따온 형식).
+SAMPLE_MAIN_HTML = """
+<script type="text/javascript">
+var node1 = {};
+node1['text'] = "사업보고서 (2025.12)";
+node1['id'] = "1";
+node1['rcpNo'] = "20260310002820";
+node1['dcmNo'] = "11104488";
+node1['eleId'] = "1";
+node1['offset'] = "957";
+node1['length'] = "4524";
+node1['dtd'] = "dart4.xsd";
+node1['children'] = [];
+var node2 = {};
+node2['text'] = "2. 연결재무제표";
+node2['id'] = "19";
+node2['rcpNo'] = "20260310002820";
+node2['dcmNo'] = "11104488";
+node2['eleId'] = "19";
+node2['offset'] = "376820";
+node2['length'] = "258279";
+node2['dtd'] = "dart4.xsd";
+node2['children'] = [];
+var node3 = {};
+node3['text'] = "2-1. 연결 재무상태표";
+node3['id'] = "20";
+node3['rcpNo'] = "20260310002820";
+node3['dcmNo'] = "11104488";
+node3['eleId'] = "20";
+node3['offset'] = "376968";
+node3['length'] = "55064";
+node3['dtd'] = "dart4.xsd";
+var node3 = {};
+node3['text'] = "2-3. 연결 포괄손익계산서";
+node3['id'] = "22";
+node3['rcpNo'] = "20260310002820";
+node3['dcmNo'] = "11104488";
+node3['eleId'] = "22";
+node3['offset'] = "451713";
+node3['length'] = "17431";
+node3['dtd'] = "dart4.xsd";
+var node3 = {};
+node3['text'] = "2-5. 연결 현금흐름표";
+node3['id'] = "24";
+node3['rcpNo'] = "20260310002820";
+node3['dcmNo'] = "11104488";
+node3['eleId'] = "24";
+node3['offset'] = "587836";
+node3['length'] = "47267";
+node3['dtd'] = "dart4.xsd";
+var node2 = {};
+node2['text'] = "4-1. 재무상태표";
+node2['id'] = "41";
+node2['rcpNo'] = "20260310002820";
+node2['dcmNo'] = "11104488";
+node2['eleId'] = "41";
+node2['offset'] = "900000";
+node2['length'] = "30000";
+node2['dtd'] = "dart4.xsd";
+var node3 = {};
+node3['text'] = "27. 현금흐름표 (연결)";
+node3['id'] = "77";
+node3['rcpNo'] = "20260310002820";
+node3['dcmNo'] = "11104488";
+node3['eleId'] = "77";
+node3['offset'] = "555555";
+node3['length'] = "11111";
+node3['dtd'] = "dart4.xsd";
+</script>
+"""
+
+RCEPT = "20260310002820"
+
+
+def _use_sample(monkeypatch, html=SAMPLE_MAIN_HTML):
+    """네트워크 대신 위 샘플 HTML 을 돌려주게 하고, 캐시를 비운다."""
+    fs._STATEMENT_LINKS_CACHE.clear()
+    monkeypatch.setattr(fs, "_fetch_dart_html", lambda url, timeout: html)
+
+
+def test_parse_toc_nodes_reads_text_and_viewdoc_params():
+    nodes = fs.parse_toc_nodes(SAMPLE_MAIN_HTML)
+    texts = [node["text"] for node in nodes]
+    assert texts[0] == "사업보고서 (2025.12)"
+    assert "2-1. 연결 재무상태표" in texts
+    balance = next(node for node in nodes if node["text"] == "2-1. 연결 재무상태표")
+    assert balance["rcpNo"] == RCEPT
+    assert balance["dcmNo"] == "11104488"
+    assert balance["eleId"] == "20"
+    assert balance["offset"] == "376968"
+    assert balance["length"] == "55064"
+    assert balance["dtd"] == "dart4.xsd"
+
+
+def test_parse_toc_nodes_empty_html():
+    assert fs.parse_toc_nodes("") == []
+    assert fs.parse_toc_nodes("<html>목차 없음</html>") == []
+
+
+def test_toc_label_strips_numbering_and_spaces():
+    assert fs.toc_label("2-1. 연결 재무상태표") == "연결재무상태표"
+    assert fs.toc_label("27. 현금흐름표 (연결)") == "현금흐름표(연결)"
+    assert fs.toc_label("Ⅱ. 연결재무제표") == "연결재무제표"
+    assert fs.toc_label("연결 손익계산서") == "연결손익계산서"
+
+
+def test_viewer_url_needs_every_parameter():
+    node = {"rcpNo": RCEPT, "dcmNo": "11104488", "eleId": "20",
+            "offset": "376968", "length": "55064", "dtd": "dart4.xsd"}
+    url = fs.viewer_url(node)
+    assert url.startswith("https://dart.fss.or.kr/report/viewer.do?")
+    assert "rcpNo=" + RCEPT in url
+    assert "dcmNo=11104488" in url
+    assert "eleId=20" in url
+    assert "offset=376968" in url
+    assert "length=55064" in url
+    assert "dtd=dart4.xsd" in url
+    # 하나라도 빠지면 직행 링크를 만들지 않는다(→ main.do 로 물러남)
+    assert fs.viewer_url({k: v for k, v in node.items() if k != "dtd"}) == ""
+    assert fs.viewer_url(None) == ""
+
+
+def test_fetch_statement_links_prefers_consolidated(monkeypatch):
+    _use_sample(monkeypatch)
+    links = fs.fetch_statement_links(RCEPT)
+
+    # 연결 손익계산서가 없으므로 연결 포괄손익계산서(eleId 22)를 쓴다.
+    assert links["labels"]["income"] == "연결포괄손익계산서"
+    assert "eleId=22" in links["income"]
+    assert links["labels"]["balance"] == "연결재무상태표"
+    assert "eleId=20" in links["balance"]
+    assert links["labels"]["cashflow"] == "연결현금흐름표"
+    assert "eleId=24" in links["cashflow"]
+    # 주석 속 "27. 현금흐름표 (연결)" 이 아니라 연결 현금흐름표를 골라야 한다.
+    assert "eleId=77" not in links["cashflow"]
+    assert links["fallback"] is False
+    assert links["main"] == "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + RCEPT
+
+
+def test_fetch_statement_links_falls_back_to_main_on_error(monkeypatch):
+    fs._STATEMENT_LINKS_CACHE.clear()
+
+    def broken(url, timeout):
+        raise OSError("네트워크 없음")
+
+    monkeypatch.setattr(fs, "_fetch_dart_html", broken)
+    links = fs.fetch_statement_links(RCEPT)
+
+    main_url = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + RCEPT
+    assert links["income"] == main_url
+    assert links["balance"] == main_url
+    assert links["cashflow"] == main_url
+    assert links["fallback"] is True
+    # 실패해도 예외를 올리지 않는다(분석은 계속된다).
+    assert fs.statement_link_label(links, "income") == "손익계산서"
+
+
+def test_fetch_statement_links_uses_section_then_main(monkeypatch):
+    # 연결재무제표 목차만 있고 개별 재무제표가 없는 보고서
+    html = """
+var node2 = {};
+node2['text'] = "2. 연결재무제표";
+node2['rcpNo'] = "20260310002820";
+node2['dcmNo'] = "11104488";
+node2['eleId'] = "19";
+node2['offset'] = "376820";
+node2['length'] = "258279";
+node2['dtd'] = "dart4.xsd";
+"""
+    _use_sample(monkeypatch, html)
+    links = fs.fetch_statement_links(RCEPT)
+    assert links["labels"]["income"] == "연결재무제표"
+    assert "eleId=19" in links["balance"]
+    assert links["fallback"] is False   # main.do 까지 물러나지는 않았다
+
+    # 목차를 아예 못 읽으면 main.do
+    _use_sample(monkeypatch, "<html></html>")
+    links = fs.fetch_statement_links(RCEPT)
+    assert links["income"].startswith("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=")
+    assert links["fallback"] is True
+
+
+def test_fetch_statement_links_caches_per_rcept(monkeypatch):
+    fs._STATEMENT_LINKS_CACHE.clear()
+    calls = {"count": 0}
+
+    def counting(url, timeout):
+        calls["count"] += 1
+        return SAMPLE_MAIN_HTML
+
+    monkeypatch.setattr(fs, "_fetch_dart_html", counting)
+    first = fs.fetch_statement_links(RCEPT)
+    second = fs.fetch_statement_links(RCEPT)
+    assert calls["count"] == 1                       # 두 번째는 캐시
+    assert first["balance"] == second["balance"]
+    second["labels"]["income"] = "바뀜"
+    assert fs.fetch_statement_links(RCEPT)["labels"]["income"] == "연결포괄손익계산서"  # 캐시는 안전
+
+
+def test_fetch_statement_links_without_rcept_no():
+    links = fs.fetch_statement_links("")
+    assert links["main"] == ""
+    assert links["balance"] == ""
+    assert fs.statement_link_label(links, "balance") == "재무상태표"
+
+
+def test_collect_company_attaches_statement_links(monkeypatch):
+    def fake_statement(api_key, corp_code, year, fs_div_pref=("CFS", "OFS")):
+        return "CFS", "연결재무제표", "2026%08d" % year, {"revenue": {"amount": 100.0}}
+
+    def fake_links(rcept_no, **kwargs):
+        return {"income": "viewer://income/" + rcept_no,
+                "balance": "viewer://balance/" + rcept_no,
+                "cashflow": "viewer://cashflow/" + rcept_no,
+                "main": "main://" + rcept_no,
+                "labels": {"income": "연결손익계산서", "balance": "연결재무상태표",
+                           "cashflow": "연결현금흐름표"},
+                "fallback": False}
+
+    monkeypatch.setattr(fs, "fetch_statement", fake_statement)
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+    monkeypatch.setattr(fs, "fetch_statement_links", fake_links)
+
+    corp = {"corp_name": "테스트", "corp_code": "00000001", "stock_code": "000001"}
+    company = fs.collect_company("KEY", corp, [2024, 2025], verbose=False)
+
+    # 연도별·회사별 두 곳에서 같은 링크를 꺼낼 수 있다.
+    assert set(company["statement_links"]) == {2024, 2025}
+    assert company["statement_links"][2025]["income"] == "viewer://income/202600002025"
+    assert company["years"][2024]["statement_links"]["balance"] == "viewer://balance/202600002024"
