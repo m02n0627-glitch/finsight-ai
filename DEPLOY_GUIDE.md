@@ -9,6 +9,28 @@
 
 ---
 
+## ⚡ 이미 만든 저장소로 바로 배포하기 (2분)
+
+파일은 이미 공개 저장소 **[m02n0627-glitch/finsight-ai](https://github.com/m02n0627-glitch/finsight-ai)** 에 올라가 있습니다. 그러면 **1~3단계는 건너뛰고** 아래만 하면 됩니다.
+
+1. <https://share.streamlit.io> → **Continue with GitHub** 로 로그인 (처음이면 **Authorize**)
+2. 아래 링크를 열면 저장소·브랜치·실행 파일이 **미리 채워진 상태**로 뜹니다.
+
+   👉 <https://share.streamlit.io/deploy?repository=m02n0627-glitch%2Ffinsight-ai&branch=main&mainModule=app.py>
+
+3. **Advanced settings** 펼치기 → **Secrets** 칸에 아래를 붙여넣기 (`...` 는 내 키로 교체)
+
+   ```toml
+   DART_API_KEY = "여기에_발급받은_40자리_인증키"
+   ```
+
+   → **Python version: 3.12** 확인 → **Save**
+4. **Deploy** 클릭 → 1~3분 뒤 `https://finsight-ai-....streamlit.app` 주소 완성 🎉
+
+> 저장소를 새로 만들고 싶다면 아래 **1~4단계**를 그대로 따르면 됩니다.
+
+---
+
 ## 0. 준비물 (2개)
 
 | 준비물 | 걸리는 시간 | 비고 |
