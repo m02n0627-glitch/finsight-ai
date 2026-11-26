@@ -1,6 +1,6 @@
-# 🚀 FinSight AI — 5분 배포 가이드 (코딩 처음이어도 됩니다)
+# 🚀 FinSight — 5분 배포 가이드 (코딩 처음이어도 됩니다)
 
-이 문서는 `app.py`(FinSight AI 웹 앱)를 **GitHub에 올리고 Streamlit Community Cloud에 배포해서
+이 문서는 `app.py`(FinSight 웹 앱 · 규칙 기반 기업 재무·리스크 분석 엔진)를 **GitHub에 올리고 Streamlit Community Cloud에 배포해서
 인터넷 주소(URL) 하나로 열리는 앱**으로 만드는 순서입니다.
 터미널 명령을 몰라도 **① GitHub 웹 화면 + ② Streamlit 웹 화면**만으로 끝낼 수 있게 썼습니다.
 
@@ -104,7 +104,7 @@
 cd dart-analyzer                       # 파일이 있는 폴더
 git init
 git add app.py analyzer.py requirements.txt .gitignore README.md DEPLOY_GUIDE.md .streamlit
-git commit -m "FinSight AI: OpenDART 기반 기업 재무·리스크 분석 웹 앱"
+git commit -m "FinSight: OpenDART 기반 기업 재무·리스크 분석 웹 앱"
 git branch -M main
 git remote add origin https://github.com/<내아이디>/finsight-ai.git
 git push -u origin main
@@ -188,7 +188,7 @@ git push -u origin main
 ## 8. 이력서·포트폴리오에 쓰기 (예시)
 
 ```
-FinSight AI — 상장사 재무·리스크 분석 웹 앱 (개인 프로젝트)
+FinSight — 상장사 재무·리스크 분석 웹 앱 · 규칙 기반 엔진 (개인 프로젝트)
 · 금융감독원 OpenDART API로 사업보고서 3개년 재무제표를 수집·정규화 (파이썬 표준 라이브러리)
 · 5대 재무 리스크 신호등·100점 스코어, DuPont ROE 3단계 분해, 운전자본 CCC 자동 산출
 · 최근 1년 공시 3,000건을 키워드로 스캔해 소송·횡령·감사의견 리스크 탐지
