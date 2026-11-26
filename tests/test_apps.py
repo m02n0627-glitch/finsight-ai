@@ -369,6 +369,12 @@ def ccc_analysis():
         "receivables": {"amount": 2.0e11},
         "inventory": {"amount": 1.0e11},
         "payables": {"amount": 8.0e10},
+        # 3표 연결형 FP&A — 매출 1조 − 매출원가 7,000억 − 판관비 3,600억 = 영업이익 −600억
+        "sgna": {"amount": 3.6e11},
+        "cash": {"amount": 2.0e11},
+        "short_term_borrowings": {"amount": 1.5e11},
+        "depreciation": {"amount": 5.0e10},
+        "capex": {"amount": -1.2e11},
     })
     fs.compute_working_capital(company["years"], [2023, 2024])
     company["ccc_comment"] = fs.make_ccc_comment(company, [2023, 2024])
@@ -387,7 +393,7 @@ def _run_analysis_app(at):
 
 
 def test_app_v2_renders_fpa_scenario_tab_without_exception(monkeypatch, patched_engine):
-    """탭 ④·가정 슬라이더 3개·시나리오 표·한계 고지가 그려진다(CCC 미공시 기업)."""
+    """탭 ④·가정 슬라이더 4개·출발점 카드·시나리오 표·한계 고지가 그려진다(CCC 미공시 기업)."""
     monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
     at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
 
@@ -399,20 +405,23 @@ def test_app_v2_renders_fpa_scenario_tab_without_exception(monkeypatch, patched_
         "④ FP&A 시나리오",
     ]
     assert [slider.label for slider in at.slider] == [
-        "매출 성장률 (연, %)", "영업이익률 변동 (%p)", "CCC 변동 (일)"]
+        "연간 매출 성장률 (%)", "판관비 중 고정비 비중 (%)",
+        "운전자본 회전일수(CCC) 변동 (일)", "매출 대비 CAPEX (%)"]
 
     text = _texts(at)
-    assert "FP&A 3개년 시나리오 시뮬레이터" in text
-    assert "시나리오 비교" in text
-    assert "내 시나리오" in text
-    assert "투자 권유가 아니" in text                          # 한계 고지
+    assert "3표 연결 FP&A 시나리오 시뮬레이터" in text
+    assert "기초 현금성자산" in text and "연간 CAPEX" in text and "이자비용" in text
+    assert "시나리오 비교" in text and "내 시나리오" in text
+    assert "투자 권유가 아니" in text                          # 면책 문구
+    assert "공시되지 않습니다" in text                          # 외부 공시 데이터 한계 고지
     assert "CCC를 공시하지 않는 업종" in text                    # 금융업 등 폴백 안내
     assert any("시뮬레이션 계산식 보기" in e.label for e in at.expander)
+    assert any("손익 · 현금흐름 상세" in e.label for e in at.expander)
 
     comparison = [d.value for d in at.dataframe if "시나리오" in list(d.value.columns)]
     assert len(comparison) == 1
     assert list(comparison[0]["시나리오"]) == ["보수적 (Bear)", "기준 (Base)", "낙관적 (Bull)", "내 시나리오"]
-    assert "Y+1 매출" in comparison[0].columns and "3년 누적 현금 영향" in comparison[0].columns
+    assert {"Y+3 매출", "Y+3 영업이익", "3년 누적 FCF", "Y+3 기말 현금", "경보"} <= set(comparison[0].columns)
 
 
 def test_app_v2_fpa_simulator_recalculates_when_slider_moves(monkeypatch):
@@ -439,11 +448,15 @@ def test_app_v2_fpa_simulator_recalculates_when_slider_moves(monkeypatch):
 
     moved = [d.value for d in at.dataframe if "시나리오" in list(d.value.columns)][0]
     assert moved.iloc[3]["Y+3 매출"] == 17280
-    assert moved.iloc[3]["가정"].startswith("성장 +20.0%")
-    # 상세 표에 Y+1~Y+3 행과 CCC가 그대로 있다
-    detail = [d.value for d in at.dataframe if "연도" in list(d.value.columns)][0]
-    assert list(detail["연도"]) == ["Y+1 · 2025년", "Y+2 · 2026년", "Y+3 · 2027년"]
-    assert detail["CCC(일)"].tolist() == [83, 83, 83]             # 73.0 + 52.1 − 41.7 ≈ 83.4일
+    assert moved.iloc[3]["가정"].startswith("성장 +20%")
+    # 상세 표(기본 = 핵심 열, 접힌 표 = 3표 전체)에 Y+1~Y+3 행이 있다
+    detail_tables = [d.value for d in at.dataframe if "연도" in list(d.value.columns)]
+    assert len(detail_tables) == 2
+    assert list(detail_tables[0]["연도"]) == ["Y+1 · 2025년", "Y+2 · 2026년", "Y+3 · 2027년"]
+    assert {"EBITDA", "FCF", "기말 현금"} <= set(detail_tables[0].columns)
+    assert {"매출원가", "판관비", "CAPEX", "이자비용"} <= set(detail_tables[1].columns)
+    # 성장률만 올렸으니 CAPEX도 매출을 따라 는다(매출의 12% → Y+1 매출 12,000억 × 12% = 1,440억)
+    assert detail_tables[1]["CAPEX"].iloc[0] == round(12000 * 0.12)
 
 
 def test_app_v2_fpa_simulator_survives_missing_industry_and_single_year(monkeypatch):

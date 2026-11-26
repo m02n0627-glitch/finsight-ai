@@ -16,7 +16,7 @@ app.py(사이드바 버전)는 기록·비교용으로 그대로 두고, 화면�
     ③ 분석 실행 시 결과 영역 상단(#analysis-result)으로 부드러운 스크롤
        (버튼을 눌렀을 때만 — 단순 입력 변경으로는 화면이 튀지 않게 session_state 플래그로 제어)
     ④ 결과 — 종합 점수·공시 위험·한계 고지 + 4개 탭
-       (핵심 재무·추이 / FP&A DuPont·CCC + 동종업계 비교 / 리스크·DART 원문 / FP&A 3개년 시나리오)
+       (핵심 재무·추이 / FP&A DuPont·CCC + 동종업계 비교 / 리스크·DART 원문 / 3표 연결 FP&A 시나리오)
 
 사이드바는 쓰지 않는다. set_page_config(initial_sidebar_state="collapsed") +
 CSS로 사이드바 토글·여백을 없애고, 최대 너비를 가운데 정렬한다.
@@ -134,7 +134,7 @@ RATIO_SERIES = [
 FEATURES = [
     ("리스크 점수 100점", "유동비율·부채비율·이자보상배율·현금흐름·부실예측"),
     ("DuPont ROE · CCC", "ROE 3요인 분해와 현금전환주기"),
-    ("FP&A 3개년 시나리오", "매출·이익률·CCC 가정으로 손익·현금 민감도 비교"),
+    ("3표 연결 FP&A 시나리오", "매출·고정비·CCC·CAPEX 가정으로 손익·FCF·현금잔고 비교"),
     ("공시 위험 · DART 원문", "최근 1년 공시 키워드와 사업보고서 원문 링크"),
 ]
 
@@ -903,13 +903,15 @@ ROE 15%가 마진으로 번 것인지 빚으로 키운 것인지가 여기서 �
 
 # ── 탭 ④ 시나리오 용어 (짧게) ───────────────────────────────────────────────
 GLOSSARY_TAB4 = """
-- **보수적 (Bear)** — 매출이 줄고 마진도 나빠지는 경우. 최악에 가까운 가정입니다.
-- **기준 (Base)** — 지금 추세가 그대로 이어지는 경우.
-- **낙관적 (Bull)** — 매출이 늘고 마진도 개선되는 경우.
-- **내 시나리오** — 아래 슬라이더 세 개(매출 성장률 · 영업이익률 변동 · CCC 변동)로 직접 만든 가정입니다.
+- **보수적 (Bear)** — 매출이 줄고 현금 회수도 늦어지는 경우(성장 −10%, CCC +20일).
+- **기준 (Base)** — 지금 추세가 그대로 이어지는 경우(성장 0%).
+- **낙관적 (Bull)** — 매출이 늘고 현금 회수도 빨라지는 경우(성장 +10%, CCC −20일).
+- **내 시나리오** — 슬라이더 네 개(매출 성장률 · 판관비 고정비 비중 · CCC 변동 · 매출 대비 CAPEX)로 직접 만든 가정입니다.
 
-**Y+1 ~ Y+3** 은 출발 연도(마지막 결산) 다음 1~3년입니다. **누적 현금 영향**은 3년치 영업이익에서
-운전자본에 묶인 돈을 뺀 합계로, +면 현금이 늘고 −면 묶인 것입니다. 법인세·이자·설비투자는 빼지 않았습니다.
+**Y+1 ~ Y+3** 은 출발 연도(마지막 결산) 다음 1~3년입니다. 매출원가·판관비 구조로 영업이익을 계산하고,
+거기서 감가상각비·운전자본·설비투자(CAPEX)·이자비용을 빼 **잉여현금흐름(FCF)** 을 구한 뒤
+기초 현금에 쌓아 **기말 현금**을 냅니다. 현금이 0 아래로 가거나 이자보상배율이 1배 미만이면 경보입니다.
+법인세·배당·차입 상환·환율·금리는 반영하지 않았습니다.
 """
 
 
@@ -2031,44 +2033,116 @@ def render_tab2(analysis):
 # ---------------------------------------------------------------------------
 
 FPA_ACCENT = {"bear": "#9CA3AF", "base": "#6B7280", "bull": "#4F46E5", "custom": "#111827"}
-FPA_MONEY_COLUMNS = ["Y+1 매출", "Y+2 매출", "Y+3 매출", "Y+3 영업이익", "3년 누적 현금 영향"]
-FPA_DETAIL_MONEY_COLUMNS = ["매출액", "영업이익", "운전자본", "운전자본 증감(+=묶임)", "누적 현금 영향"]
+FPA_COMPARE_MONEY = ["Y+3 매출", "Y+3 영업이익", "3년 누적 FCF", "Y+3 기말 현금"]
+FPA_DETAIL_MONEY = ["매출액", "매출원가", "판관비", "영업이익", "EBITDA", "운전자본 증감",
+                    "CAPEX", "이자비용", "FCF", "기말 현금"]
 
 
-def fpa_assumption_inputs(company, latest):
-    """가정 입력 3개(매출 성장률·영업이익률 변동·CCC 변동) — 기업별로 값이 남도록 key를 나뉜다."""
+def fpa_assumption_inputs(company, latest, defaults):
+    """
+    가정 입력 4개 — 매출 성장률 · 판관비 고정비 비중 · CCC 변동 · 매출 대비 CAPEX.
+
+    기업별로 값이 남도록 slider key에 기업 코드를 붙인다.
+    """
     suffix = company.get("corp_code") or company.get("name") or "corp"
     growth_range = fs.FPNA_RANGES["revenue_growth_pct"]
-    margin_range = fs.FPNA_RANGES["op_margin_delta_pp"]
+    fixed_range = fs.FPNA_RANGES["fixed_cost_ratio_pct"]
     ccc_range = fs.FPNA_RANGES["ccc_delta_days"]
+    capex_range = fs.FPNA_RANGES["capex_pct"]
 
-    columns = st.columns(3)
-    with columns[0]:
+    upper = st.columns(2)
+    with upper[0]:
         growth = st.slider(
-            "매출 성장률 (연, %)",
+            "연간 매출 성장률 (%)",
             min_value=float(growth_range[0]), max_value=float(growth_range[1]),
             value=0.0, step=float(growth_range[2]), format="%.1f",
             key="fs2_fpa_growth_%s" % suffix,
             help="매년 같은 성장률이 %d년 반복된다고 가정합니다. 0%%면 %d년 매출이 그대로 이어집니다."
                  % (fs.FPNA_HORIZON_YEARS, latest),
         )
-    with columns[1]:
-        margin_delta = st.slider(
-            "영업이익률 변동 (%p)",
-            min_value=float(margin_range[0]), max_value=float(margin_range[1]),
-            value=0.0, step=float(margin_range[2]), format="%.1f",
-            key="fs2_fpa_margin_%s" % suffix,
-            help="출발 연도 영업이익률에 더할 값입니다. 3년 내내 같은 이익률이 유지된다고 봅니다.",
+    with upper[1]:
+        fixed_ratio = st.slider(
+            "판관비 중 고정비 비중 (%)",
+            min_value=int(fixed_range[0]), max_value=int(fixed_range[1]),
+            value=int(defaults.get("fixed_cost_ratio_pct", fs.FPNA_DEFAULT_FIXED_COST_RATIO)),
+            step=int(fixed_range[2]), format="%d",
+            key="fs2_fpa_fixed_%s" % suffix,
+            help="판관비 가운데 매출이 줄어도 그대로 나가는 몫입니다. 높을수록 매출이 늘 때 "
+                 "영업이익이 더 빠르게 늘고(영업레버리지), 매출이 줄 때 더 크게 줄어듭니다.",
         )
-    with columns[2]:
+    lower = st.columns(2)
+    with lower[0]:
         ccc_delta = st.slider(
-            "CCC 변동 (일)",
+            "운전자본 회전일수(CCC) 변동 (일)",
             min_value=int(ccc_range[0]), max_value=int(ccc_range[1]),
             value=0, step=int(ccc_range[2]), format="%d",
             key="fs2_fpa_ccc_%s" % suffix,
             help="+면 현금이 더 오래 묶이고(유출), −면 회수가 빨라집니다(유입).",
         )
-    return float(growth), float(margin_delta), float(ccc_delta)
+    with lower[1]:
+        capex = st.slider(
+            "매출 대비 CAPEX (%)",
+            min_value=float(capex_range[0]), max_value=float(capex_range[1]),
+            value=float(defaults.get("capex_pct", 0.0)), step=float(capex_range[2]), format="%.1f",
+            key="fs2_fpa_capex_%s" % suffix,
+            help="설비·유형자산에 매년 매출의 몇 %%를 다시 투자하는지입니다. 기본값은 최근 공시 "
+                 "'유형자산의 취득 ÷ 매출'이고, 미공시면 0%%입니다.",
+        )
+    return float(growth), float(fixed_ratio), float(ccc_delta), float(capex)
+
+
+def fpa_start_cards(baseline, latest):
+    """출발점 카드 4장 — 매출·현금·CAPEX·이자비용(미공시는 '-')."""
+    revenue = baseline.get("revenue")
+    if baseline.get("cost_structure_available"):
+        cost_note = "매출원가 %s · 판관비 %s" % (
+            pct((baseline.get("cogs_ratio") or 0) * 100.0), pct((baseline.get("sgna_ratio") or 0) * 100.0))
+    else:
+        cost_note = "매출원가·판관비 미공시 → 이익률 고정"
+    cards = [
+        ("%d년 매출액" % latest, human_won(revenue), cost_note, "#111827"),
+        ("기초 현금성자산", human_won(baseline.get("cash")) if baseline.get("cash_available") else "-",
+         ("차입금 %s" % human_won(baseline.get("borrowings"))) if baseline.get("borrowings_available")
+         else "차입금 미공시", "#4F46E5"),
+        ("연간 CAPEX", human_won(baseline.get("capex")) if baseline.get("capex_available") else "-",
+         ("매출의 %s" % pct(baseline.get("capex_ratio"))) if baseline.get("capex_ratio") is not None
+         else "유형자산 취득 미공시", "#6B7280"),
+        ("이자비용", human_won(baseline.get("interest_expense")) if baseline.get("interest_available") else "-",
+         ("감가상각비 %s" % human_won(baseline.get("depreciation"))) if baseline.get("depreciation_available")
+         else "감가상각비 미공시", "#9CA3AF"),
+    ]
+    for row in (cards[:2], cards[2:]):
+        columns = st.columns(2)
+        for column, (label, value, sub, accent) in zip(columns, row):
+            column.markdown(card(label, value, sub, accent), unsafe_allow_html=True)
+
+
+def fpa_scenario_cards(result):
+    """시나리오 카드 4장 — 큰 숫자는 Y+3 추정 매출액."""
+    cards = []
+    for scenario in result["scenarios"]:
+        title = (scenario["label"] if scenario.get("is_custom")
+                 else "%s (%s)" % (scenario["label"], scenario.get("short") or scenario["key"]))
+        cash = scenario.get("cum_fcf")
+        sub = "Y+3 영업이익 %s · 누적 FCF %s" % (
+            human_won(scenario.get("end_op_income")), "-" if cash is None else human_won(cash))
+        cards.append((title, human_won(scenario.get("end_revenue")), sub,
+                      FPA_ACCENT.get(scenario["key"], "#4F46E5")))
+    for row in (cards[:2], cards[2:]):
+        columns = st.columns(2)
+        for column, (label, value, sub, accent) in zip(columns, row):
+            column.markdown(card(label, value, sub, accent), unsafe_allow_html=True)
+
+
+def fpa_alert_cell(scenario):
+    """비교표의 경보 칸 — 'Y+2 이자보상배율 0.8배'처럼 짧게."""
+    alert = scenario.get("alert")
+    if alert:
+        short = alert["text"].split(" — ")[0]
+        return short
+    if scenario.get("interest_coverage_min") is None and scenario.get("end_cash") is None:
+        return "판정 불가"
+    return "-"
 
 
 def render_fpa_simulator(company, latest):
@@ -2077,52 +2151,23 @@ def render_fpa_simulator(company, latest):
         st.info("매출액이 공시되지 않았거나 0 이하라 시나리오를 계산할 수 없습니다. 다른 기업이나 연도를 선택해 보세요.")
         return
 
-    # 출발점 — 최신 결산 연도의 실제 수치
-    columns = st.columns(4)
-    columns[0].markdown(
-        card("%d년 매출액" % latest, human_won(baseline["revenue"]), "시뮬레이션 출발점(실제 공시)", "#111827"),
-        unsafe_allow_html=True)
-    columns[1].markdown(
-        card("영업이익률", pct(baseline.get("op_margin")),
-             "영업이익 %s" % human_won(baseline.get("op_income")), "#4F46E5"),
-        unsafe_allow_html=True)
-    if baseline.get("ccc") is None:
-        ccc_value, ccc_sub = "-", "금융업 등 미공시"
-    else:
-        ccc_value = num(baseline.get("ccc"), 0, "일")
-        ccc_sub = "DSO %s · DIO %s · DPO %s" % (
-            num(baseline.get("dso"), 0), num(baseline.get("dio"), 0), num(baseline.get("dpo"), 0))
-    columns[2].markdown(card("현금전환주기 (CCC)", ccc_value, ccc_sub, "#6B7280"), unsafe_allow_html=True)
-    columns[3].markdown(
-        card("운전자본 (근사)",
-             "-" if baseline.get("working_capital") is None else human_won(baseline["working_capital"]),
-             "매출 1일분 × CCC", "#9CA3AF"),
-        unsafe_allow_html=True)
-
+    # 출발점 — 최신 결산 연도의 3표 수치
+    fpa_start_cards(baseline, latest)
     st.write("")
-    growth, margin_delta, ccc_delta = fpa_assumption_inputs(company, latest)
-    result = fs.simulate_fpa_scenarios(company, latest, growth, margin_delta, ccc_delta)
+
+    defaults = fs.fpa_default_assumptions(baseline)
+    growth, fixed_ratio, ccc_delta, capex_pct = fpa_assumption_inputs(company, latest, defaults)
+    result = fs.simulate_fpa_scenarios(company, latest, growth, fixed_ratio, ccc_delta, capex_pct)
     if result.get("status") != "ok":
         st.info(result.get("message") or "시뮬레이션을 계산할 수 없습니다.")
         st.caption(result.get("note") or fs.FPNA_DISCLAIMER)
         return
 
     st.caption("가정을 움직이면 ‘내 시나리오’와 표가 바로 다시 계산됩니다 — 실행 버튼을 누를 필요가 없습니다. "
-               "금액 단위: 억원, 기간: Y+1~Y+3.")
+               "매년 같은 가정을 반복하고, 금액 단위는 억원입니다.")
 
-    # 시나리오 카드 4장 — 큰 숫자는 3년 뒤(Y+3) 추정 매출액
-    cards = st.columns(4)
-    for column, scenario in zip(cards, result["scenarios"]):
-        cash = scenario.get("cum_cash_impact")
-        title = (scenario["label"] if scenario.get("is_custom")
-                 else "%s (%s)" % (scenario["label"], scenario.get("short") or scenario["key"]))
-        sub = "Y+3 영업이익 %s · 누적 현금 %s" % (
-            human_won(scenario.get("end_op_income")),
-            "-" if cash is None else human_won(cash))
-        column.markdown(
-            card(title, human_won(scenario.get("end_revenue")), sub,
-                 FPA_ACCENT.get(scenario["key"], "#4F46E5")),
-            unsafe_allow_html=True)
+    # 시나리오 카드 4장
+    fpa_scenario_cards(result)
     st.caption("카드의 큰 숫자는 3년 뒤(%d년) 추정 매출액입니다." % (latest + fs.FPNA_HORIZON_YEARS))
 
     figure = chart_fpa_scenarios(result)
@@ -2130,88 +2175,136 @@ def render_fpa_simulator(company, latest):
         st.plotly_chart(figure)
 
     # 3개 기본 시나리오 + 내 시나리오 비교
-    section_title("시나리오 비교", "세 가정만 다르고 나머지 규칙은 같습니다 · 금액 단위: 억원")
+    section_title("시나리오 비교", "가정만 다르고 계산 규칙은 같습니다 · 금액 단위: 억원")
     rows = []
     for scenario in result["scenarios"]:
-        row = {
+        rows.append({
             "시나리오": (scenario["label"] if scenario.get("is_custom")
                          else "%s (%s)" % (scenario["label"], scenario.get("short") or scenario["key"])),
-            "가정": "성장 %+.1f%% · 이익률 %+.1f%%p · CCC %+.0f일" % (
-                scenario["revenue_growth_pct"], scenario["op_margin_delta_pp"], scenario["ccc_delta_days"]),
-        }
-        for item in scenario["years"]:
-            row["Y+%d 매출" % item["step"]] = row_eok(item.get("revenue"))
-        row["Y+3 영업이익"] = row_eok(scenario.get("end_op_income"))
-        row["3년 누적 현금 영향"] = row_eok(scenario.get("cum_cash_impact"))
-        rows.append(row)
+            "가정": scenario.get("assumption_text", ""),
+            "Y+3 매출": row_eok(scenario.get("end_revenue")),
+            "Y+3 영업이익": row_eok(scenario.get("end_op_income")),
+            "영업이익률": None if scenario.get("end_op_margin") is None else round(scenario["end_op_margin"], 1),
+            "3년 누적 FCF": row_eok(scenario.get("cum_fcf")),
+            "Y+3 기말 현금": row_eok(scenario.get("end_cash")),
+            "경보": fpa_alert_cell(scenario),
+        })
     comparison = pd.DataFrame(rows)
-    for column_name in FPA_MONEY_COLUMNS:
+    for column_name in FPA_COMPARE_MONEY:
         if column_name in comparison.columns:
             comparison[column_name] = pd.to_numeric(comparison[column_name], errors="coerce").astype("Int64")
     st.dataframe(
         comparison, hide_index=True,
-        column_config={column_name: st.column_config.NumberColumn(column_name, format="%d")
-                       for column_name in FPA_MONEY_COLUMNS if column_name in comparison.columns},
-    )
-    st.caption("누적 현금 영향 = Σ(영업이익 − 운전자본 증감). 운전자본 증감이 +면 현금이 묶인 것이라 영업이익에서 빼서 반영합니다. "
-               "법인세·이자비용·설비투자(CapEx)는 빼지 않았습니다.")
-
-    # 내 시나리오 연도별 상세
-    custom = result["custom"]
-    section_title("내 시나리오 연도별 상세", "Y+1~Y+3은 세 가정에 따른 추정입니다 · 금액 단위: 억원")
-    detail = []
-    for item in custom["years"]:
-        detail.append({
-            "연도": (("%s · %d년" % (item["label"], item["year"])) if isinstance(item.get("year"), int)
-                     else item["label"]),
-            "매출액": row_eok(item.get("revenue")),
-            "영업이익": row_eok(item.get("op_income")),
-            "영업이익률(%)": None if item.get("op_margin") is None else round(item["op_margin"], 1),
-            "CCC(일)": None if item.get("ccc") is None else round(item["ccc"]),
-            "운전자본": row_eok(item.get("working_capital")),
-            "운전자본 증감(+=묶임)": row_eok(item.get("delta_working_capital")),
-            "누적 현금 영향": row_eok(item.get("cum_cash_impact")),
-        })
-    detail_frame = pd.DataFrame(detail)
-    for column_name in FPA_DETAIL_MONEY_COLUMNS:
-        if column_name in detail_frame.columns:
-            detail_frame[column_name] = pd.to_numeric(detail_frame[column_name], errors="coerce").astype("Int64")
-    st.dataframe(
-        detail_frame, hide_index=True,
         column_config={
             **{column_name: st.column_config.NumberColumn(column_name, format="%d")
-               for column_name in FPA_DETAIL_MONEY_COLUMNS if column_name in detail_frame.columns},
-            "영업이익률(%)": st.column_config.NumberColumn("영업이익률(%)", format="%.1f"),
-            "CCC(일)": st.column_config.NumberColumn("CCC(일)", format="%d일"),
+               for column_name in FPA_COMPARE_MONEY if column_name in comparison.columns},
+            "영업이익률": st.column_config.NumberColumn("영업이익률", format="%.1f%%"),
         },
     )
+    st.caption("Y+3 영업이익률은 Y+3 영업이익 ÷ Y+3 매출입니다. 경보는 이자보상배율 1배 미만 또는 "
+               "기말 현금이 0 아래로 내려가는 첫 해입니다.")
 
-    # 핵심 인사이트 2줄
+    # 내 시나리오 연도별 상세 — 기본은 핵심 열만, 전체는 접어 둔다(모바일 가로 넘침 방지)
+    custom = result["custom"]
+    section_title("내 시나리오 연도별 상세", "Y+1~Y+3은 네 가정에 따른 추정입니다 · 금액 단위: 억원")
+
+    def year_rows(columns):
+        detail = []
+        for item in custom["years"]:
+            row = {
+                "연도": (("%s · %d년" % (item["label"], item["year"])) if isinstance(item.get("year"), int)
+                         else item["label"]),
+            }
+            for name, key, digits in columns:
+                value = item.get(key)
+                if name in FPA_DETAIL_MONEY:
+                    row[name] = row_eok(value)
+                else:
+                    row[name] = None if value is None else round(value, digits)
+            detail.append(row)
+        return pd.DataFrame(detail)
+
+    def show_frame(frame, money_columns, ratio_columns):
+        for column_name in money_columns:
+            if column_name in frame.columns:
+                frame[column_name] = pd.to_numeric(frame[column_name], errors="coerce").astype("Int64")
+        st.dataframe(
+            frame, hide_index=True,
+            column_config={
+                **{column_name: st.column_config.NumberColumn(column_name, format="%d")
+                   for column_name in money_columns if column_name in frame.columns},
+                **{name: st.column_config.NumberColumn(name, format=fmt)
+                   for name, fmt in ratio_columns.items() if name in frame.columns},
+            },
+        )
+
+    compact = [("매출액", "revenue", 1), ("영업이익", "op_income", 1), ("영업이익률(%)", "op_margin", 1),
+               ("EBITDA", "ebitda", 1), ("FCF", "fcf", 1), ("기말 현금", "ending_cash", 1)]
+    show_frame(year_rows(compact), ["매출액", "영업이익", "EBITDA", "FCF", "기말 현금"],
+               {"영업이익률(%)": "%.1f"})
+
+    with st.expander("손익 · 현금흐름 상세 (매출원가·판관비·운전자본·CAPEX·이자)"):
+        full = [("매출액", "revenue", 1), ("매출원가", "cost_of_sales", 1), ("판관비", "sgna", 1),
+                ("영업이익", "op_income", 1), ("EBITDA", "ebitda", 1), ("감가상각비", "depreciation", 1),
+                ("운전자본 증감", "delta_working_capital", 1), ("CAPEX", "capex", 1),
+                ("이자비용", "interest_expense", 1), ("FCF", "fcf", 1), ("기말 현금", "ending_cash", 1),
+                ("이자보상배율(배)", "interest_coverage", 2)]
+        show_frame(year_rows(full),
+                   ["매출액", "매출원가", "판관비", "영업이익", "EBITDA", "감가상각비",
+                    "운전자본 증감", "CAPEX", "이자비용", "FCF", "기말 현금"],
+                   {"이자보상배율(배)": "%.2f"})
+        st.caption("운전자본 증감이 +면 현금이 묶인 것이라 FCF에서 빼고, CAPEX·이자비용도 FCF에서 뺍니다. "
+                   "기말 현금 = 기초 현금성자산 + 그해까지 누적 FCF. 법인세·배당·차입 상환은 반영하지 않았습니다.")
+
+    # 핵심 인사이트 2~3줄
     if result.get("insights"):
         quote_box("<br>".join(html_lib.escape(line) for line in result["insights"]))
 
     if result.get("capital_impaired"):
-        st.warning("자본잠식(자본총계 0 이하) 상태입니다 — 이 시뮬레이션은 손익·운전자본만 보여 주고, "
+        st.warning("자본잠식(자본총계 0 이하) 상태입니다 — 이 시뮬레이션은 손익·현금만 보여 주고, "
                    "자본이 언제 회복되는지는 계산하지 않습니다.")
     if result.get("op_loss"):
-        st.caption("출발점이 영업적자(영업이익률 %s)입니다 — 이익률 가정을 올려 흑자 전환 여부를 확인해 보세요."
+        st.caption("출발점이 영업적자(영업이익률 %s)입니다 — 가정을 올려 흑자 전환 시점을 확인해 보세요."
                    % pct(baseline.get("op_margin")))
+    if not result.get("depreciation_available"):
+        # DART API가 현금흐름표 '조정'을 합계로만 주는 회사는 감가상각비가 없다.
+        # 지어내지 않고, 공시된 영업활동현금흐름 − CAPEX 를 사실 그대로 참고치로 보여 준다.
+        ocf, capex_value = baseline.get("op_cash_flow"), baseline.get("capex")
+        if ocf is not None and capex_value is not None:
+            st.caption("감가상각비가 공시 API에 없어 EBITDA를 영업이익으로 계산했습니다 — FCF가 그만큼 작게(보수적으로) 나옵니다. "
+                       "참고로 공시된 %d년 영업활동현금흐름 %s에서 CAPEX %s를 뺀 %s가 실제에 가까운 잉여현금흐름입니다."
+                       % (latest, human_won(ocf), human_won(capex_value), human_won(ocf - capex_value)))
+        else:
+            st.caption("감가상각비가 공시 API에 없어 EBITDA를 영업이익으로 계산했습니다 — FCF가 그만큼 작게(보수적으로) 나옵니다.")
+    if not result.get("cash_available"):
+        st.caption("현금성자산이 공시되지 않아(금융업 등) 기말 현금 잔고와 현금 고갈 경보는 계산하지 않았습니다.")
+    if not result.get("interest_available"):
+        st.caption("이자비용(금융비용)이 공시되지 않아 이자보상배율과 이자 차감은 계산하지 않았습니다.")
     if not result.get("wc_available"):
-        st.caption("CCC를 공시하지 않는 업종(금융업 등)이라 운전자본·현금 영향 칸이 비어 있습니다. 손익 칸은 그대로 계산됩니다.")
+        st.caption("CCC를 공시하지 않는 업종(금융업 등)이라 운전자본 증감은 FCF에 넣지 않았습니다. 손익 칸은 그대로 계산됩니다.")
+    if not result.get("cost_structure"):
+        st.caption("매출원가·판관비가 공시되지 않아 영업이익률을 출발 연도 수준으로 고정했습니다 — "
+                   "고정비 비중 슬라이더는 이 기업에서는 쓰이지 않습니다.")
 
     with st.expander("ⓘ 시뮬레이션 계산식 보기"):
         st.markdown(
             "| 항목 | 계산식 |\n| --- | --- |\n"
             "| 매출액 | 출발 연도 매출액 × (1 + 매출 성장률)^n |\n"
-            "| 영업이익률 | 출발 연도 영업이익률 + 변동(%p) |\n"
-            "| 영업이익 | 매출액 × 영업이익률 ÷ 100 |\n"
-            "| CCC | 출발 연도 CCC + 변동(일) |\n"
-            "| 운전자본 | 매출액 ÷ 365 × CCC |\n"
-            "| 운전자본 증감 | 운전자본(n) − 운전자본(n−1) |\n"
-            "| 현금 영향 | 영업이익 − 운전자본 증감 |\n"
+            "| 매출원가 | 매출액(n) × (매출원가(0) ÷ 매출액(0)) — 매출을 따라가는 변동비 |\n"
+            "| 판관비 | 판관비(0)×고정비 비중 + 매출액(n) × 판관비(0)×(1−고정비 비중) ÷ 매출액(0) |\n"
+            "| 영업이익 | 매출액 − 매출원가 − 판관비 + 기타손익(0) |\n"
+            "| 이자보상배율 | 영업이익(n) ÷ 이자비용(0) |\n"
+            "| EBITDA | 영업이익(n) + 감가상각비(0) |\n"
+            "| 운전자본 | 매출액 ÷ 365 × CCC , CCC(n) = CCC(0) + 변동(일) |\n"
+            "| FCF | EBITDA(n) − 운전자본 증감 − CAPEX(n) − 이자비용(0) |\n"
+            "| 기말 현금 | 기초 현금성자산(0) + 누적 FCF |\n"
         )
         st.caption("운전자본은 공시된 CCC(DSO+DIO−DPO)에서 ‘매출 1일분 × 회전일수’로 근사합니다. "
-                   "매출채권·재고자산·매입채무 잔액을 해마다 따로 추정하지 않는 단순법입니다.")
+                   "매출채권·재고자산·매입채무 잔액을 해마다 따로 추정하지 않는 단순법입니다. "
+                   "기타손익(0)은 공시 영업이익과 (매출−매출원가−판관비)의 차이를 그대로 유지한 값이라, "
+                   "성장률 0인 기준 시나리오는 출발 연도 영업이익을 재현합니다.")
+    for line in result.get("limits") or []:
+        st.caption(line)
     st.caption(result.get("note") or fs.FPNA_DISCLAIMER)
 
 
@@ -2223,9 +2316,9 @@ def render_tab4(analysis):
         st.markdown(GLOSSARY_TAB4)
 
     section_title(
-        "FP&A 3개년 시나리오 시뮬레이터",
-        "%d년 결산 실적을 출발점으로 세 가지만 바꿔 봅니다 — 매출 성장률 · 영업이익률 변동 · CCC 변동. "
-        "Y+1~Y+3 손익과 운전자본 현금 영향을 같은 규칙으로 계산합니다." % latest)
+        "3표 연결 FP&A 시나리오 시뮬레이터",
+        "%d년 결산 실적을 출발점으로 네 가지만 바꿔 봅니다 — 매출 성장률 · 판관비 고정비 비중 · CCC 변동 · "
+        "매출 대비 CAPEX. 손익계산서·현금흐름표·재무상태표(현금)를 이어서 Y+1~Y+3을 계산합니다." % latest)
 
     company = companies[0]
     if len(companies) > 1:
