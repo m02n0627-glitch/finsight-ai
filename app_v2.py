@@ -383,32 +383,34 @@ APP_CSS = """
   button[data-testid="stSidebarCollapseButton"] { display: none !important; }
   header[data-testid="stHeader"] { background: transparent; }
 
-  /* ── 히어로 헤더 (딥 차콜 카드) ─────────────────────────────── */
+  /* ── 히어로 헤더 (딥 차콜 카드 · 가운데 정렬) ─────────────────── */
   .fs-hero {
       background: #131315;
       border-radius: 22px;
-      padding: 26px 30px 34px;
+      padding: 28px 28px 32px;
       margin: 0 0 22px 0;
+      text-align: center;
   }
   .fs-hero-top {
-      display: flex; align-items: baseline; justify-content: space-between;
-      margin-bottom: 46px;
+      display: flex; align-items: baseline; justify-content: center;
+      gap: 10px; margin-bottom: 22px;
   }
   .fs-hero-brand { font-size: 13px; font-weight: 700; color: #F9FAFB; letter-spacing: -0.01em; }
   .fs-hero-count { font-size: 11.5px; color: #6B7280; font-variant-numeric: tabular-nums; }
-  .fs-hero-label { font-size: 12.5px; color: #9CA3AF; margin-bottom: 10px; }
+  .fs-hero-count::before { content: "·"; margin-right: 8px; color: #4B5563; }
+  .fs-hero-label { font-size: 12.5px; color: #9CA3AF; margin-bottom: 8px; }
   .fs-hero-title {
-      font-size: 34px; font-weight: 900; letter-spacing: -0.03em;
-      line-height: 1.18; color: #FFFFFF;
-      /* Pretendard Variable은 45~920 가변 폰트라 900(Black)까지 실제로 그려진다. */
+      font-size: 32px; font-weight: 700; letter-spacing: -0.025em;
+      line-height: 1.25; color: #FFFFFF;
+      /* Pretendard Variable은 45~920 가변 폰트 — font-weight와 wght 값을 함께 700으로 맞춘다. */
       font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
                    "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
-      font-variation-settings: "wght" 900;
+      font-variation-settings: "wght" 700;
       text-rendering: optimizeLegibility;
   }
   .fs-hero-title .accent { color: #7C83FF; }
   .fs-hero-sub {
-      font-size: 13px; color: #9CA3AF; margin-top: 14px; line-height: 1.7;
+      font-size: 13px; color: #9CA3AF; margin-top: 12px; line-height: 1.7;
   }
 
   /* ── 입력 카드 ──────────────────────────────────────────────── */
@@ -630,8 +632,9 @@ APP_CSS = """
 
   @media (max-width: 640px) {
       .block-container { padding-top: 1.2rem; }
-      .fs-hero { padding: 22px 20px 20px; border-radius: 18px; }
-      .fs-hero-title { font-size: 23px; }
+      .fs-hero { padding: 24px 20px 26px; border-radius: 18px; }
+      .fs-hero-top { margin-bottom: 18px; }
+      .fs-hero-title { font-size: 24px; }
       .fs-result-title { font-size: 20px; }
       .st-key-fs2-inputcard, .st-key-fs2-keycard { padding: 18px 16px 16px !important; }
   }
@@ -645,7 +648,7 @@ HERO_TMPL = """
     <div class="fs-hero-count">OpenDART 사업보고서</div>
   </div>
   <div class="fs-hero-label">규칙 기반 기업 재무 분석</div>
-  <div class="fs-hero-title">재무제표와 공시를,<br><span class="accent">한 장</span>으로.</div>
+  <div class="fs-hero-title">사업보고서 한 권을,<br><span class="accent">한 화면</span>의 근거로.</div>
   <div class="fs-hero-sub">리스크 점수 · DuPont ROE · CCC · 공시 위험을 DART 원문에서 바로 계산합니다.</div>
 </div>
 """
