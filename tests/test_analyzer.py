@@ -1305,11 +1305,13 @@ def test_industry_seed_file_shipped():
     assert samsung["stock_code"] == "005930"
     assert samsung["induty_code"] == "264"
 
-    # statement_links_seed.json 의 40개사가 모두 들어 있어야 한다(업종 비교 대상 확보)
+    # 업종 비교 대상(118개사)은 모두 DART 원문 직행 링크 시드에도 있어야 한다
+    # (피어를 비교할 때마다 원문 링크가 표지로 물러나지 않게).
     with open(os.path.join(os.path.dirname(path), "statement_links_seed.json"), encoding="utf-8") as fp:
         links_seed = json.load(fp)
-    missing = [row["corp_name"] for row in links_seed["companies"]
-               if row["corp_code"] not in seed]
+    linked_codes = {row["corp_code"] for row in links_seed["companies"]}
+    missing = [record["corp_name"] for record in seed.values()
+               if record["corp_code"] not in linked_codes]
     assert missing == []
 
     for record in seed.values():
@@ -1318,6 +1320,29 @@ def test_industry_seed_file_shipped():
     with open(path, encoding="utf-8") as fp:
         raw = fp.read()
     assert not re.search(r"[0-9a-f]{40}", raw)          # 40자리 인증키 형태 없음
+    assert "crtfc_key" not in raw
+
+
+def test_statement_links_seed_covers_major_companies():
+    """직행 링크 시드 — 100개사 이상·모든 링크가 viewer.do·접수번호 일치·API 키 없음."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "statement_links_seed.json")
+    with open(path, encoding="utf-8") as fp:
+        raw = fp.read()
+    seed = json.loads(raw)
+
+    assert len(seed["companies"]) >= 100
+    assert len(seed["links"]) >= 300
+    for rcept_no, entry in seed["links"].items():
+        for kind in ("income", "balance", "cashflow"):
+            assert "/report/viewer.do?" in entry[kind]
+            assert "rcpNo=%s" % rcept_no in entry[kind]       # 같은 보고서의 표인지 확인
+        assert entry["labels"]["balance"]                        # 목차 이름이 비지 않음
+    # 3개년이 모두 연결된 회사가 대부분이어야 한다
+    full = [row for row in seed["companies"]
+            if all(row["years"].get(str(year)) in seed["links"] for year in (2023, 2024, 2025))]
+    assert len(full) >= 100
+    assert not re.search(r"[0-9a-f]{40}", raw)                    # 40자리 인증키 형태 없음
     assert "crtfc_key" not in raw
 
 
@@ -2036,23 +2061,26 @@ def test_excel_filename_replaces_forbidden_characters():
 
 
 # ---------------------------------------------------------------------------
-# 4-6. FP&A 3개년 시나리오 시뮬레이터 — simulate_fpa_scenarios()
+# 4-6. 3표 연결형 FP&A 시뮬레이터 — simulate_fpa_scenarios()
 # ---------------------------------------------------------------------------
 # 손으로 검산하기 좋은 숫자로 맞췄다.
-#   매출 365,000,000,000 · 매출원가 73,000,000,000 · 영업이익 36,500,000,000 (10%)
-#   매출채권 60,000,000,000 → DSO 60일 / 재고자산 6,000,000,000 → DIO 30일
-#   매입채무 8,000,000,000 → DPO 40일 / CCC = 60 + 30 − 40 = 50일
-#   운전자본(근사) = 365,000,000,000 ÷ 365 × 50 = 50,000,000,000
+#   매출 1,000e9 · 매출원가 600e9(60%) · 판관비 300e9(30%) · 영업이익 100e9(10%)
+#   감가상각비 60e9 · 유형자산의 취득 -120e9(현금 유출 → CAPEX 120e9) · 이자비용 20e9
+#   현금성자산 200e9 · 단기차입금 100e9 + 사채 50e9 = 차입금 150e9
+#   매출채권 100e9 → DSO 36.5일 / 재고자산 50e9 → DIO 30.42일 / 매입채무 60e9 → DPO 36.5일
+#   CCC = 36.5 + 30.4167 − 36.5 = 30.4167일 / 운전자본(근사) = 1,000e9 ÷ 365 × 30.4167 = 83.3333e9
 
 FPA_SPEC = {
-    2023: {"revenue": 300e9, "op_income": 30e9, "net_income": 24e9, "assets": 500e9,
-           "current_assets": 200e9, "liabilities": 300e9, "current_liab": 150e9,
-           "equity": 200e9, "cost_of_sales": 60e9, "receivables": 50e9,
-           "inventory": 5e9, "payables": 7e9},
-    2024: {"revenue": 365e9, "op_income": 36.5e9, "net_income": 29e9, "assets": 520e9,
-           "current_assets": 210e9, "liabilities": 310e9, "current_liab": 155e9,
-           "equity": 210e9, "cost_of_sales": 73e9, "receivables": 60e9,
-           "inventory": 6e9, "payables": 8e9},
+    2023: {"revenue": 900e9, "op_income": 90e9, "net_income": 70e9, "assets": 1400e9,
+           "current_assets": 450e9, "liabilities": 850e9, "current_liab": 280e9,
+           "equity": 550e9, "cost_of_sales": 540e9, "sgna": 270e9, "receivables": 90e9,
+           "inventory": 45e9, "payables": 54e9},
+    2024: {"revenue": 1000e9, "op_income": 100e9, "net_income": 75e9, "assets": 1500e9,
+           "current_assets": 500e9, "liabilities": 900e9, "current_liab": 300e9,
+           "equity": 600e9, "cost_of_sales": 600e9, "sgna": 300e9, "receivables": 100e9,
+           "inventory": 50e9, "payables": 60e9, "cash": 200e9,
+           "short_term_borrowings": 100e9, "bonds": 50e9, "depreciation": 60e9,
+           "capex": -120e9, "interest_expense": 20e9},
 }
 
 
@@ -2063,124 +2091,253 @@ def fpa_company(spec=None, name="테스트"):
     return {"name": name, "corp_code": "00000000", "stock_code": "000000", "years": years_data}
 
 
-def test_fpa_baseline_reads_latest_year_and_working_capital():
+def test_fpa_baseline_reads_three_statements() -> None:
     company = fpa_company()
     baseline = fs.fpa_baseline(company)
 
     assert baseline["year"] == 2024
-    assert baseline["revenue"] == 365e9
-    assert baseline["op_income"] == 36.5e9
+    assert baseline["revenue"] == 1000e9 and baseline["op_income"] == 100e9
     assert baseline["op_margin"] == pytest.approx(10.0)
-    assert baseline["assets"] == 520e9 and baseline["liabilities"] == 310e9 and baseline["equity"] == 210e9
-    assert baseline["dso"] == pytest.approx(60.0)
-    assert baseline["dio"] == pytest.approx(30.0)
-    assert baseline["dpo"] == pytest.approx(40.0)
-    assert baseline["ccc"] == pytest.approx(50.0)
-    assert baseline["working_capital"] == pytest.approx(50e9)      # 매출 1일분(10억) × 50일
+    # 손익계산서 원가구조
+    assert baseline["cost_structure_available"] is True
+    assert baseline["cost_of_sales"] == 600e9 and baseline["sgna"] == 300e9
+    assert baseline["cogs_ratio"] == pytest.approx(0.6)
+    assert baseline["sgna_ratio"] == pytest.approx(0.3)
+    assert baseline["op_residual"] == pytest.approx(0.0)   # 공시 영업이익 = 매출 − 원가 − 판관비
+    # 재무상태표 · 현금흐름표
+    assert baseline["cash"] == 200e9 and baseline["cash_available"] is True
+    assert baseline["borrowings"] == 150e9 and baseline["borrowings_available"] is True
+    assert baseline["depreciation"] == 60e9 and baseline["depreciation_available"] is True
+    assert baseline["capex"] == 120e9 and baseline["capex_available"] is True  # 음수를 양수로
+    assert baseline["capex_ratio"] == pytest.approx(12.0)
+    assert baseline["interest_expense"] == 20e9
+    # 운전자본
+    assert baseline["ccc"] == pytest.approx(30.4167, abs=1e-3)
+    assert baseline["working_capital"] == pytest.approx(83.3333e9, rel=1e-4)
+
     assert baseline["capital_impaired"] is False and baseline["op_loss"] is False
-    assert fs.fpa_baseline(company, 2023)["revenue"] == 300e9       # 연도를 지정하면 그 해
+    assert fs.fpa_baseline(company, 2023)["revenue"] == 900e9
+    # 2023년은 현금·CAPEX·이자비용이 없어 '미공시'로 구분된다(0과 다르다)
+    old = fs.fpa_baseline(company, 2023)
+    assert old["cash"] is None and old["cash_available"] is False
+    assert old["capex"] is None and old["capex_available"] is False
     assert fs.fpa_baseline({"years": {}}) is None
     assert fs.fpa_baseline({}) is None
 
 
-def test_simulate_fpa_scenarios_math_and_order():
-    """Y+1 매출·영업이익·운전자본 현금 영향을 손으로 검산한다."""
+def test_fpa_default_assumptions_use_disclosed_capex_ratio() -> None:
+    defaults = fs.fpa_default_assumptions(fs.fpa_baseline(fpa_company()))
+    assert defaults["fixed_cost_ratio_pct"] == pytest.approx(fs.FPNA_DEFAULT_FIXED_COST_RATIO)
+    assert defaults["capex_pct"] == pytest.approx(12.0)
+    # CAPEX 미공시면 0%에서 시작한다
+    assert fs.fpa_default_assumptions({"capex_ratio": None})["capex_pct"] == 0.0
+
+
+def test_fpa_depreciation_prefers_combined_and_never_double_counts() -> None:
+    combined = fs.fpa_depreciation({"da_combined": {"amount": 90e9},
+                                    "depreciation": {"amount": 60e9}})
+    assert combined["amount"] == 90e9 and combined["basis"] == "combined"
+
+    parts = fs.fpa_depreciation({"depreciation": {"amount": 60e9},
+                                 "amortization": {"amount": 20e9},
+                                 "lease_depreciation": {"amount": 10e9}})
+    assert parts["amount"] == 90e9 and parts["basis"] == "sum"
+
+    # 음수로 들어와도 절댓값으로 더한다(현금흐름표 표기 흔들림 방어)
+    assert fs.fpa_depreciation({"depreciation": {"amount": -60e9}})["amount"] == 60e9
+    missing = fs.fpa_depreciation({})
+    assert missing["amount"] is None and missing["available"] is False
+
+
+def test_fpa_total_borrowings_sums_parts_then_falls_back_to_single_line() -> None:
+    parts = fs.fpa_total_borrowings({"short_term_borrowings": {"amount": 100e9},
+                                     "long_term_borrowings": {"amount": 30e9},
+                                     "bonds": {"amount": 20e9}})
+    assert parts["amount"] == 150e9 and parts["available"] is True
+    assert fs.fpa_total_borrowings({"borrowings": {"amount": 70e9}})["amount"] == 70e9
+    assert fs.fpa_total_borrowings({})["available"] is False
+
+
+def test_fetch_extra_accounts_normalizes_new_three_statement_accounts(monkeypatch) -> None:
+    """전체 재무제표 응답에서 3표 연결용 계정을 뽑는다(네트워크 없이 행 목록으로 대체)."""
+    rows = [
+        {"sj_div": "IS", "account_nm": "판매비와 관리비", "account_id": "-표준계정코드 미사용-",
+         "thstrm_amount": "300,000,000,000", "frmtrm_amount": "270,000,000,000"},
+        {"sj_div": "BS", "account_nm": "현금및현금성자산", "account_id": "ifrs-full_CashAndCashEquivalents",
+         "thstrm_amount": "200,000,000,000", "frmtrm_amount": "180,000,000,000"},
+        {"sj_div": "BS", "account_nm": "단기차입금", "account_id": "-표준계정코드 미사용-",
+         "thstrm_amount": "100,000,000,000", "frmtrm_amount": "90,000,000,000"},
+        {"sj_div": "BS", "account_nm": "사채", "account_id": "ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued",
+         "thstrm_amount": "50,000,000,000", "frmtrm_amount": "50,000,000,000"},
+        {"sj_div": "CF", "account_nm": "감가상각비", "account_id": "-표준계정코드 미사용-",
+         "thstrm_amount": "60,000,000,000", "frmtrm_amount": "55,000,000,000"},
+        {"sj_div": "CF", "account_nm": "유형자산의 취득", "account_id": "-표준계정코드 미사용-",
+         "thstrm_amount": "-120,000,000,000", "frmtrm_amount": "-100,000,000,000"},
+    ]
+    monkeypatch.setattr(fs, "fetch_full_statement_rows", lambda *a, **k: ("CFS", rows))
+
+    found = fs.fetch_extra_accounts("fake-key", "00126380", 2024, fs_div="CFS")
+    assert found["sgna"]["amount"] == 300e9
+    assert found["cash"]["amount"] == 200e9
+    assert found["short_term_borrowings"]["amount"] == 100e9
+    assert found["bonds"]["amount"] == 50e9
+    assert found["depreciation"]["amount"] == 60e9
+    assert found["capex"]["amount"] == -120e9        # 원본 부호는 그대로, 해석은 fpa_capex가 한다
+
+    baseline = fs.fpa_baseline({"years": {2024: {"accounts": found, "ratios": {}}}})
+    assert baseline["depreciation"] == 60e9
+    assert baseline["capex"] == 120e9
+    assert baseline["borrowings"] == 150e9
+
+
+def test_simulate_fpa_scenarios_three_statement_math() -> None:
+    """Y+1~Y+3 손익 → EBITDA → FCF → 기말 현금을 손으로 검산한다."""
     company = fpa_company()
     result = fs.simulate_fpa_scenarios(company, 2024, revenue_growth_pct=10.0,
-                                       op_margin_delta_pp=3.0, ccc_delta_days=10)
+                                      fixed_cost_ratio_pct=70.0, ccc_delta_days=0.0, capex_pct=12.0)
 
     assert result["status"] == "ok"
     assert result["base_year"] == 2024 and result["horizon"] == 3
     assert [s["label"] for s in result["scenarios"]] == ["보수적", "기준", "낙관적", "내 시나리오"]
     assert result["scenarios"][3]["is_custom"] is True
+    assert result["assumptions"] == {"revenue_growth_pct": 10.0, "fixed_cost_ratio_pct": 70.0,
+                                     "ccc_delta_days": 0.0, "capex_pct": 12.0}
 
     custom = result["custom"]
-    # 매출: 365,000 × 1.1^n / 영업이익률 10 + 3 = 13% / CCC 50 + 10 = 60일
-    assert custom["years"][0]["revenue"] == pytest.approx(401.5e9)
-    assert custom["years"][1]["revenue"] == pytest.approx(441.65e9)
-    assert custom["years"][2]["revenue"] == pytest.approx(485.815e9)
-    assert custom["op_margin"] == pytest.approx(13.0)
-    assert custom["years"][0]["op_income"] == pytest.approx(52.195e9)
-    assert custom["years"][2]["op_income"] == pytest.approx(485.815e9 * 0.13)
+    rows = custom["years"]
+    # Y+1: 매출 1,100 / 매출원가 660 / 판관비 210+99=309 / 영업이익 131
+    assert rows[0]["revenue"] == pytest.approx(1100e9)
+    assert rows[0]["cost_of_sales"] == pytest.approx(660e9)
+    assert rows[0]["sgna"] == pytest.approx(309e9)
+    assert rows[0]["op_income"] == pytest.approx(131e9)
+    assert rows[0]["op_margin"] == pytest.approx(131e9 / 1100e9 * 100.0)
+    # EBITDA 131+60=191, 운전자본 1100/365×30.4167=91.667 → 증감 8.333, CAPEX 132, 이자 20
+    assert rows[0]["ebitda"] == pytest.approx(191e9)
+    assert rows[0]["delta_working_capital"] == pytest.approx(8.3333e9, rel=1e-4)
+    assert rows[0]["capex"] == pytest.approx(132e9)
+    assert rows[0]["fcf"] == pytest.approx(30.6667e9, rel=1e-4)
+    assert rows[0]["ending_cash"] == pytest.approx(230.6667e9, rel=1e-4)
+    assert rows[0]["interest_coverage"] == pytest.approx(6.55)
+    # Y+3: 매출 1,331 / 영업이익 202.61
+    assert rows[2]["revenue"] == pytest.approx(1000e9 * 1.1 ** 3)
+    assert rows[2]["sgna"] == pytest.approx(210e9 + 1331e9 * 0.09)
+    assert rows[2]["op_income"] == pytest.approx(1331e9 - 1331e9 * 0.6 - (210e9 + 1331e9 * 0.09))
+    assert custom["end_revenue"] == pytest.approx(rows[2]["revenue"])
+    assert custom["cum_fcf"] == pytest.approx(sum(row["fcf"] for row in rows))
+    assert custom["end_cash"] == pytest.approx(200e9 + custom["cum_fcf"])
+    # 기초 현금 대비 늘어난다 — FCF가 계속 플러스이기 때문
+    assert custom["cum_fcf"] > 0
 
-    # 운전자본 = 매출 ÷ 365 × 60 → 66.0 / 72.6 / 79.86 (십억)
-    assert custom["years"][0]["working_capital"] == pytest.approx(66.0e9)
-    assert custom["years"][1]["working_capital"] == pytest.approx(72.6e9)
-    assert custom["years"][2]["working_capital"] == pytest.approx(79.86e9)
-    # 증감 16.0 / 6.6 / 7.26 → 현금 영향 = 영업이익 − 증감
-    assert custom["years"][0]["delta_working_capital"] == pytest.approx(16.0e9)
-    assert custom["years"][1]["delta_working_capital"] == pytest.approx(6.6e9)
-    assert custom["years"][2]["delta_working_capital"] == pytest.approx(7.26e9)
-    assert custom["years"][0]["cash_impact"] == pytest.approx(36.195e9)
-    assert custom["years"][1]["cash_impact"] == pytest.approx(50.8145e9)
-    assert custom["years"][2]["cash_impact"] == pytest.approx(55.89595e9)
-    assert custom["years"][2]["cum_cash_impact"] == pytest.approx(142.90545e9)
-    assert custom["cum_cash_impact"] == pytest.approx(142.90545e9)
-    assert custom["total_wc_cash_impact"] == pytest.approx(-29.86e9)   # 3년 동안 묶인 현금
+    # 손익계산서 항등식: 매출 − 매출원가 − 판관비 = 영업이익 (기타손익 0)
+    for row in rows:
+        assert row["revenue"] - row["cost_of_sales"] - row["sgna"] == pytest.approx(row["op_income"])
 
-    # 보수적 < 기준 < 낙관적 (매출·영업이익·누적 현금 모두)
     bear, base, bull = result["scenarios"][0], result["scenarios"][1], result["scenarios"][2]
     assert bear["end_revenue"] < base["end_revenue"] < bull["end_revenue"]
     assert bear["end_op_income"] < base["end_op_income"] < bull["end_op_income"]
-    assert bear["cum_cash_impact"] < base["cum_cash_impact"] < bull["cum_cash_impact"]
-    # 기준 시나리오 = 출발 연도 그대로(3년 내내 같은 매출·이익률)
+    assert bear["cum_fcf"] < base["cum_fcf"] < bull["cum_fcf"]
+    # 기준 시나리오(성장 0%)는 출발 연도 손익을 그대로 재현한다
     for row in base["years"]:
-        assert row["revenue"] == pytest.approx(365e9)
-        assert row["op_income"] == pytest.approx(36.5e9)
+        assert row["revenue"] == pytest.approx(1000e9)
+        assert row["op_income"] == pytest.approx(100e9)
         assert row["delta_working_capital"] == pytest.approx(0.0, abs=1e-6)
-    assert base["cum_cash_impact"] == pytest.approx(109.5e9)
 
 
-def test_simulate_fpa_scenarios_keeps_three_year_rows_and_labels():
+def test_simulate_fpa_scenarios_operating_leverage_from_fixed_cost_ratio() -> None:
+    """판관비 고정비 비중이 높으면 매출이 늘 때 영업이익이 더 빠르게 는다."""
     company = fpa_company()
-    result = fs.simulate_fpa_scenarios(company, revenue_growth_pct=-5.0)
+    high = fs.simulate_fpa_scenarios(company, 2024, revenue_growth_pct=10.0, fixed_cost_ratio_pct=100.0)
+    low = fs.simulate_fpa_scenarios(company, 2024, revenue_growth_pct=10.0, fixed_cost_ratio_pct=0.0)
 
-    for scenario in result["scenarios"]:
-        assert len(scenario["years"]) == 3
-        assert [row["label"] for row in scenario["years"]] == ["Y+1", "Y+2", "Y+3"]
-        assert [row["year"] for row in scenario["years"]] == [2025, 2026, 2027]
-        assert scenario["years"][2]["revenue"] == pytest.approx(scenario["end_revenue"])
-    assert result["assumptions"]["revenue_growth_pct"] == pytest.approx(-5.0)
-    assert result["assumptions"]["op_margin_delta_pp"] == pytest.approx(0.0)
-    assert result["assumptions"]["ccc_delta_days"] == pytest.approx(0.0)
+    # 고정비 100%: 판관비 300 고정 → 영업이익 1100−660−300 = 140
+    assert high["custom"]["years"][0]["op_income"] == pytest.approx(140e9)
+    # 고정비 0%: 판관비가 매출을 따라 330 → 영업이익 1100−660−330 = 110
+    assert low["custom"]["years"][0]["op_income"] == pytest.approx(110e9)
+    assert high["custom"]["years"][0]["op_margin"] > low["custom"]["years"][0]["op_margin"]
 
-
-def test_simulate_fpa_scenarios_note_and_insights():
-    company = fpa_company()
-    result = fs.simulate_fpa_scenarios(company, revenue_growth_pct=5.0, ccc_delta_days=5)
-
-    assert "투자 권유가 아니" in result["note"]
-    assert "민감도" in result["note"]
-    assert 1 <= len(result["insights"]) <= 2            # 핵심 인사이트 1~2줄
-    assert "운전자본" in result["insights"][0]           # 운전자본에 묶인 현금
-    assert "500억원" in result["insights"][0]            # 50,000,000,000원 = 500억원
-    assert "내 시나리오" in result["insights"][1]
+    # 반대로 매출이 줄면 고정비가 큰 쪽이 더 크게 나빠진다
+    high_down = fs.simulate_fpa_scenarios(company, 2024, revenue_growth_pct=-10.0, fixed_cost_ratio_pct=100.0)
+    low_down = fs.simulate_fpa_scenarios(company, 2024, revenue_growth_pct=-10.0, fixed_cost_ratio_pct=0.0)
+    assert high_down["custom"]["years"][0]["op_income"] < low_down["custom"]["years"][0]["op_income"]
 
 
-def test_simulate_fpa_scenarios_without_ccc_is_safe():
-    """금융업처럼 재고자산·매출원가가 없어 CCC(None)여도 손익은 계산한다."""
+def test_simulate_fpa_scenarios_flags_interest_and_cash_alerts() -> None:
+    """이자보상배율 1배 미만과 현금 고갈을 각각 첫 해로 잡는다."""
     spec = {
-        2024: {"revenue": 1000e9, "op_income": 80e9, "net_income": 60e9,
-               "assets": 5000e9, "liabilities": 4500e9, "equity": 500e9},
+        2024: {"revenue": 1000e9, "op_income": 50e9, "net_income": 10e9,
+               "assets": 900e9, "liabilities": 800e9, "equity": 100e9,
+               "cost_of_sales": 700e9, "sgna": 250e9,
+               "cash": 20e9, "depreciation": 30e9, "capex": -300e9, "interest_expense": 60e9},
     }
     company = fpa_company(spec)
-    result = fs.simulate_fpa_scenarios(company, revenue_growth_pct=4.0, op_margin_delta_pp=1.0)
+    result = fs.simulate_fpa_scenarios(company, 2024, revenue_growth_pct=0.0, capex_pct=25.0)
+
+    custom = result["custom"]
+    # 영업이익 50 < 이자 60 → 첫 해부터 이자보상배율 0.83배
+    assert custom["years"][0]["interest_coverage"] == pytest.approx(50e9 / 60e9)
+    assert custom["first_icr_alert_step"] == 1
+    assert custom["years"][0]["icr_alert"] is True
+    # FCF = (50+30) − 0 − 250 − 60 = −230 → 기초 현금 20에서 첫 해에 이미 고갈
+    assert custom["years"][0]["fcf"] == pytest.approx(-230e9)
+    assert custom["first_cash_alert_step"] == 1
+    assert custom["years"][0]["ending_cash"] < 0
+    assert "이자보상배율" in custom["alert"]["text"]
+    assert "경보선" in custom["alert_text"]
+
+    # 경보가 없는 기업은 '-' 대신 안내 문구가 나온다
+    safe = fs.simulate_fpa_scenarios(fpa_company(), revenue_growth_pct=0.0)
+    assert safe["custom"]["alert"] is None
+    assert "닿지 않습니다" in safe["custom"]["alert_text"]
+
+
+def test_simulate_fpa_scenarios_falls_back_to_margin_without_cost_structure() -> None:
+    """금융업처럼 매출원가·판관비가 없으면 영업이익률 고정 방식으로 물러난다(예외 없음)."""
+    spec = {
+        2024: {"revenue": 1000e9, "op_income": 80e9, "net_income": 60e9,
+               "assets": 5000e9, "liabilities": 4500e9, "equity": 500e9,
+               "interest_expense": 30e9, "cash": 100e9},
+    }
+    company = fpa_company(spec)
+    result = fs.simulate_fpa_scenarios(company, 2024, revenue_growth_pct=4.0, fixed_cost_ratio_pct=100.0)
 
     assert result["status"] == "ok"
-    assert result["wc_available"] is False
-    assert result["baseline"]["ccc"] is None and result["baseline"]["working_capital"] is None
+    assert result["cost_structure"] is False
     custom = result["custom"]
     assert custom["end_revenue"] == pytest.approx(1000e9 * 1.04 ** 3)
-    assert custom["end_op_income"] == pytest.approx(1000e9 * 1.04 ** 3 * 0.09)
-    assert all(row["working_capital"] is None for row in custom["years"])
-    assert all(row["wc_cash_impact"] is None for row in custom["years"])
-    assert custom["cum_cash_impact"] is None
-    assert "운전자본·현금 영향은 계산하지 않았습니다" in result["insights"][0]
+    assert custom["end_op_income"] == pytest.approx(1000e9 * 1.04 ** 3 * 0.08)
+    assert all(row["cost_of_sales"] is None and row["sgna"] is None for row in custom["years"])
+    # CCC를 못 구해도 FCF는 운전자본 없이 계산된다
+    assert result["wc_available"] is False
+    assert all(row["delta_working_capital"] is None for row in custom["years"])
+    assert custom["cum_fcf"] is not None
+    assert "영업이익률을 출발 연도 수준" in result["insights"][0] or "고정해 계산" in result["insights"][0]
 
 
-def test_simulate_fpa_scenarios_revenue_missing_or_zero():
+def test_simulate_fpa_scenarios_handles_missing_cash_depreciation_and_interest() -> None:
+    """현금·감가상각비·이자비용이 미공시여도 예외 없이 None으로 물러난다."""
+    spec = {
+        2024: {"revenue": 500e9, "op_income": 40e9, "net_income": 30e9,
+               "assets": 700e9, "liabilities": 300e9, "equity": 400e9,
+               "cost_of_sales": 300e9, "sgna": 160e9},
+    }
+    result = fs.simulate_fpa_scenarios(fpa_company(spec), 2024, revenue_growth_pct=5.0)
+
+    assert result["status"] == "ok"
+    assert result["cash_available"] is False
+    assert result["depreciation_available"] is False
+    assert result["interest_available"] is False
+    custom = result["custom"]
+    assert all(row["ebitda"] == row["op_income"] for row in custom["years"])   # 감가상각비 0 취급
+    assert all(row["ending_cash"] is None for row in custom["years"])
+    assert all(row["interest_coverage"] is None for row in custom["years"])
+    assert custom["cum_fcf"] is not None
+    assert any("보수적으로" in line for line in result["insights"])
+
+
+def test_simulate_fpa_scenarios_revenue_missing_or_zero() -> None:
     empty = fs.simulate_fpa_scenarios({})
     assert empty["status"] == "no_data" and empty["scenarios"] == []
+    assert empty["limits"] == fs.FPNA_LIMITS
 
     no_revenue = fs.simulate_fpa_scenarios({"years": {2024: {"accounts": {}}}})
     assert no_revenue["status"] == "no_revenue"
@@ -2191,42 +2348,45 @@ def test_simulate_fpa_scenarios_revenue_missing_or_zero():
     assert zero["status"] == "no_revenue"                # 0으로 나누지 않는다
 
 
-def test_simulate_fpa_scenarios_capital_impaired_and_operating_loss():
+def test_simulate_fpa_scenarios_capital_impaired_and_operating_loss() -> None:
     spec = {
         2024: {"revenue": 100e9, "op_income": -20e9, "net_income": -30e9,
                "assets": 300e9, "current_assets": 100e9, "liabilities": 350e9,
                "current_liab": 250e9, "equity": -50e9,
-               "cost_of_sales": 90e9, "receivables": 20e9, "inventory": 10e9, "payables": 6e9},
+               "cost_of_sales": 90e9, "sgna": 30e9, "receivables": 20e9,
+               "inventory": 10e9, "payables": 6e9, "interest_expense": 10e9, "cash": 5e9},
     }
     company = fpa_company(spec)
-    result = fs.simulate_fpa_scenarios(company, revenue_growth_pct=-30.0,
-                                       op_margin_delta_pp=-15.0, ccc_delta_days=45)
+    result = fs.simulate_fpa_scenarios(company, 2024, revenue_growth_pct=-30.0,
+                                       fixed_cost_ratio_pct=70.0, ccc_delta_days=45.0)
 
     assert result["status"] == "ok"
     assert result["capital_impaired"] is True and result["op_loss"] is True
-    assert result["baseline"]["op_margin"] == pytest.approx(-20.0)
-    assert result["custom"]["op_margin"] == pytest.approx(-35.0)
-    assert result["custom"]["end_op_income"] < 0
-    # 적자·자본잠식이어도 나눗셈이 없어 숫자가 그대로 나온다.
-    assert result["custom"]["years"][0]["working_capital"] is not None
-    assert result["custom"]["cum_cash_impact"] is not None
+    custom = result["custom"]
+    assert custom["years"][0]["op_income"] < 0
+    assert custom["years"][0]["working_capital"] is not None
+    assert custom["cum_fcf"] is not None
+    assert custom["first_icr_alert_step"] == 1       # 영업적자 → 이자보상배율 음수
 
 
-def test_simulate_fpa_scenarios_clamps_assumptions_to_slider_range():
+def test_simulate_fpa_scenarios_clamps_assumptions_to_slider_range() -> None:
     company = fpa_company()
-    result = fs.simulate_fpa_scenarios(company, revenue_growth_pct=999.0,
-                                       op_margin_delta_pp=-999.0, ccc_delta_days="abc")
+    result = fs.simulate_fpa_scenarios(company, 2024, revenue_growth_pct=999.0,
+                                       fixed_cost_ratio_pct=250.0, ccc_delta_days="abc",
+                                       capex_pct=-5.0)
 
-    assert result["assumptions"] == {"revenue_growth_pct": 40.0,
-                                     "op_margin_delta_pp": -15.0,
-                                     "ccc_delta_days": 0.0}
+    assert result["assumptions"] == {"revenue_growth_pct": 40.0, "fixed_cost_ratio_pct": 100.0,
+                                     "ccc_delta_days": 0.0, "capex_pct": 0.0}
 
     nan_result = fs.simulate_fpa_scenarios(company, revenue_growth_pct=float("nan"))
     assert nan_result["assumptions"]["revenue_growth_pct"] == 0.0
     assert nan_result["status"] == "ok"
+    # 기본값(None)은 기업의 공시 비율에서 온다
+    assert nan_result["assumptions"]["fixed_cost_ratio_pct"] == pytest.approx(70.0)
+    assert nan_result["assumptions"]["capex_pct"] == pytest.approx(12.0)
 
 
-def test_simulate_fpa_scenarios_does_not_mutate_company():
+def test_simulate_fpa_scenarios_does_not_mutate_company() -> None:
     company = fpa_company()
     before = json.dumps({str(y): company["years"][y]["accounts"] for y in company["years"]}, sort_keys=True)
     fs.simulate_fpa_scenarios(company, revenue_growth_pct=12.0, ccc_delta_days=-10)
@@ -2234,14 +2394,13 @@ def test_simulate_fpa_scenarios_does_not_mutate_company():
     assert before == after                               # 순수 함수 — 입력을 바꾸지 않는다
 
 
-def test_simulate_fpa_scenarios_insight_reads_equal_when_custom_matches_base():
-    """가정이 모두 0이면 내 시나리오 = 기준 — '0억원 많습니다' 대신 '같습니다'로 읽힌다."""
-    result = fs.simulate_fpa_scenarios(fpa_company())
+def test_simulate_fpa_scenarios_note_limits_and_insights() -> None:
+    result = fs.simulate_fpa_scenarios(fpa_company(), revenue_growth_pct=5.0, ccc_delta_days=5)
 
-    assert result["custom"]["cum_cash_impact"] == pytest.approx(result["scenarios"][1]["cum_cash_impact"])
-    assert "기준 시나리오와 같습니다" in result["insights"][1]
-    assert "0억원" not in result["insights"][1]
-
-    # 가정을 움직이면 다시 '많습니다/적습니다'로 돌아온다
-    moved = fs.simulate_fpa_scenarios(fpa_company(), revenue_growth_pct=20.0)
-    assert ("많습니다" in moved["insights"][1]) or ("적습니다" in moved["insights"][1])
+    assert "투자 권유가 아니" in result["note"]
+    assert "민감도" in result["note"]
+    assert len(result["limits"]) >= 2                    # 공시 데이터 한계 고지
+    assert any("감가상각비" in line for line in result["limits"])
+    assert 2 <= len(result["insights"]) <= 3
+    assert "영업레버리지" in result["insights"][0]        # 매출 대비 영업이익 민감도
+    assert "FCF" in result["insights"][1]                 # 누적 FCF · 기말 현금

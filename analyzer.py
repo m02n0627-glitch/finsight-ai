@@ -409,6 +409,56 @@ EXTRA_SPECS = [
     {"key": "payables", "label": "매입채무", "sj_div": ("BS",),
      "names": ("매입채무", "매입채무(순액)", "외상매입금"),
      "ids": ("ifrs-full_TradeAndOtherCurrentPayablesToTradeSuppliers", "ifrs-full_TradePayables")},
+    # --- 3표 연결형 FP&A 시뮬레이터용 계정 (IS 원가구조 · BS 현금/차입 · CF 상각/투자) ---
+    #   매출원가(cost_of_sales)는 위에 이미 있다. 여기서는 나머지 3표 항목을 더 뽑는다.
+    #   이 API(fnlttSinglAcntAll)는 회사에 따라 현금흐름표의 '조정' 세부 항목(감가상각비 등)을
+    #   합계 한 줄로만 주기도 한다. 그런 해는 값이 없으므로 화면에서 '미공시'로 표시한다.
+    {"key": "sgna", "label": "판매비와관리비", "sj_div": ("IS", "CIS"),
+     "names": ("판매비와관리비", "판매비와 관리비", "판매관리비", "판매비및관리비",
+               "판매비와관리비합계", "판매비와관리비 총계"),
+     "ids": ("dart_TotalSellingGeneralAdministrativeExpenses",
+             "ifrs-full_SellingGeneralAndAdministrativeExpense")},
+    {"key": "cash", "label": "현금및현금성자산", "sj_div": ("BS",),
+     "names": ("현금및현금성자산", "현금 및 현금성자산", "현금및현금등가물", "현금과예금",
+               "현금및예치금", "현금 및 예치금"),
+     "ids": ("ifrs-full_CashAndCashEquivalents", "ifrs-full_CashAndCashEquivalentsAtCarryingValue")},
+    # 차입금은 한 줄로 공시되지 않는 경우가 많아 (단기차입금 + 장기차입금 + 사채 + 유동성장기부채)를
+    # 따로 뽑아 fpa_total_borrowings()가 합산한다. '차입금' 한 줄만 있는 회사는 그 값을 쓴다.
+    {"key": "short_term_borrowings", "label": "단기차입금", "sj_div": ("BS",),
+     "names": ("단기차입금", "단기차입금(순액)"),
+     "ids": ("ifrs-full_ShorttermBorrowings", "ifrs-full_CurrentBorrowings")},
+    {"key": "long_term_borrowings", "label": "장기차입금", "sj_div": ("BS",),
+     "names": ("장기차입금", "장기차입금(순액)"),
+     "ids": ("ifrs-full_LongtermBorrowings", "ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived")},
+    {"key": "current_lt_debt", "label": "유동성장기부채", "sj_div": ("BS",),
+     "names": ("유동성장기부채", "유동성장기차입금", "유동성사채", "유동성장기부채(사채)"),
+     "ids": ("ifrs-full_CurrentPortionOfNoncurrentBorrowings",)},
+    {"key": "bonds", "label": "사채", "sj_div": ("BS",),
+     "names": ("사채", "회사채"),
+     "ids": ("ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued", "ifrs-full_BondsIssued")},
+    {"key": "borrowings", "label": "차입금", "sj_div": ("BS",),
+     "names": ("차입금", "총차입금", "차입금합계"),
+     "ids": ("ifrs-full_Borrowings",)},
+    # 현금흐름표의 감가상각비. '감가상각비 및 상각비'처럼 합쳐 공시하는 회사가 있어
+    # 합산 항목을 따로 두고, 없을 때만 (감가상각비 + 무형자산상각비 + 사용권자산상각비)를 더한다.
+    {"key": "da_combined", "label": "감가상각비 및 상각비", "sj_div": ("CF",),
+     "names": ("감가상각비 및 상각비", "감가상각비및상각비", "감가상각비와 무형자산상각비",
+               "감가상각비와무형자산상각비"),
+     "ids": ("ifrs-full_DepreciationAndAmortisationExpense",)},
+    {"key": "depreciation", "label": "감가상각비", "sj_div": ("CF",),
+     "names": ("감가상각비", "유형자산감가상각비"),
+     "ids": ("dart_DepreciationExpense", "ifrs-full_DepreciationPropertyPlantAndEquipment")},
+    {"key": "amortization", "label": "무형자산상각비", "sj_div": ("CF",),
+     "names": ("무형자산상각비", "무형자산 상각비"),
+     "ids": ("ifrs-full_AmortisationIntangibleAssetsOtherThanGoodwill",)},
+    {"key": "lease_depreciation", "label": "사용권자산감가상각비", "sj_div": ("CF",),
+     "names": ("사용권자산감가상각비", "사용권자산 감가상각비"),
+     "ids": ("ifrs-full_DepreciationRightofuseAssets",)},
+    # 설비투자(CAPEX) — 현금흐름표의 '유형자산의 취득'(현금 유출, 보통 음수)을 양수로 정규화한다.
+    {"key": "capex", "label": "유형자산의 취득", "sj_div": ("CF",),
+     "names": ("유형자산의 취득", "유형자산취득", "유형자산의취득", "유형자산 취득"),
+     "ids": ("ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+             "ifrs-full_PurchaseOfPropertyPlantAndEquipment")},
 ]
 
 
@@ -1280,58 +1330,89 @@ def build_ccc_gap(companies, latest):
 
 
 # ---------------------------------------------------------------------------
-# 4-1-2. FP&A 3개년 시나리오 시뮬레이터 (매출 성장률 · 영업이익률 변동 · CCC 변동)
+# 4-1-2. 3표 연결형 FP&A 시뮬레이터 (손익계산서 · 현금흐름표 · 재무상태표)
 # ---------------------------------------------------------------------------
 #
-#  최신 결산 연도의 실제 OpenDART 수치를 '출발점'으로 두고, 세 가지 가정만 바꿔
-#  향후 3개년(Y+1 ~ Y+3)의 손익과 운전자본·현금 영향을 계산한다.
+#  최신 결산 연도의 실제 OpenDART 수치를 '출발점'으로 두고, 네 가지 가정만 바꿔
+#  향후 3개년(Y+1 ~ Y+3)의 손익계산서 · 현금흐름표 · 재무상태표(현금 잔고)를 이어서 계산한다.
 #
 #  계산 규칙 (결정론적 · 외부 데이터·확률 없음)
-#    매출액(n)      = 매출액(0) × (1 + 매출 성장률)^n
-#    영업이익률(n)  = 영업이익률(0) + 영업이익률 변동(%p)      ← 3년 내내 같은 수준 유지
-#    영업이익(n)    = 매출액(n) × 영업이익률(n) ÷ 100
-#    CCC(n)         = CCC(0) + CCC 변동(일)
-#    운전자본(n)    = 매출액(n) ÷ 365 × CCC(n)                ← 매출 1일분 × 회전일수 근사
-#    운전자본 증감  = 운전자본(n) − 운전자본(n−1)             (양수 = 현금이 묶임 → 유출)
-#    현금 영향(n)   = 영업이익(n) − 운전자본 증감(n)          (세전 · CapEx 제외한 단순 대용치)
-#    누적 현금 영향 = Σ 현금 영향(Y+1 ~ Y+3)
+#    [가정]  매출 성장률 g · 판관비 중 고정비 비중 f · CCC 변동 d일 · 매출 대비 CAPEX r%
+#
+#    [손익계산서]
+#      매출액(n)       = 매출액(0) × (1+g)^n
+#      매출원가(n)     = 매출액(n) × (매출원가(0) ÷ 매출액(0))          ← 매출을 따라가는 변동비
+#      판관비(n)       = 판관비(0)×f + 매출액(n) × 판관비(0)×(1−f) ÷ 매출액(0)
+#                        (고정비 부분은 매출이 변해도 그대로, 변동비 부분만 매출을 따라간다)
+#      영업이익(n)     = 매출액(n) − 매출원가(n) − 판관비(n) + 기타손익(0)
+#      이자보상배율(n) = 영업이익(n) ÷ 이자비용(0)                      ← 1배 미만이면 경보
+#
+#    [현금흐름표]
+#      EBITDA(n)       = 영업이익(n) + 감가상각비(0)                     ← 상각비는 3년 고정 가정
+#      운전자본(n)     = 매출액(n) ÷ 365 × CCC(n) ,  CCC(n) = CCC(0) + d
+#      운전자본 증감   = 운전자본(n) − 운전자본(n−1)                     (양수 = 현금이 묶임 → 유출)
+#      CAPEX(n)        = 매출액(n) × r ÷ 100
+#      잉여현금흐름(n) = EBITDA(n) − 운전자본 증감(n) − CAPEX(n) − 이자비용(0)
+#      누적 FCF        = Σ 잉여현금흐름(Y+1 ~ Y+3)
+#
+#    [재무상태표]
+#      기말 현금성자산(n) = 기초 현금성자산(0) + 누적 FCF(n)             ← 음수면 현금 고갈 경보
 #
 #  왜 이렇게 계산하나
-#    · 운전자본을 '매출 1일분 × CCC'로 근사하면, 공시된 DSO·DIO·DPO에서 나온 CCC를 그대로 쓰면서도
-#      매출채권·재고자산·매입채무 잔액을 매년 따로 추정하지 않아도 된다(실무에서 쓰는 단순법).
-#    · 매출이 늘면 운전자본도 함께 늘어 현금이 묶이고, CCC가 길어지면 같은 매출에서 더 많은
-#      현금이 묶인다. 두 효과가 한 식에 자연스럽게 들어간다.
+#    · 판관비를 고정비·변동비로 쪼개면 매출이 늘 때 영업이익이 더 빠르게 늘어나는
+#      영업레버리지(operating leverage)가 숫자로 드러난다. 예전 모델처럼 영업이익률을
+#      사용자가 직접 정하지 않아도 원가구조에서 이익이 따라 나온다.
+#    · 운전자본은 공시된 DSO·DIO·DPO에서 나온 CCC를 '매출 1일분 × 회전일수'로 근사한다.
+#    · 감가상각비·CAPEX·이자비용을 빼야 '남는 현금(FCF)'이 된다. 남는 현금을 현금 잔고에
+#      쌓아 두면 3년 뒤 현금이 마르는지, 이자 감당이 되는지 한 화면에서 보인다.
+#    · 기타손익(0)은 '공시 영업이익 − (매출 − 매출원가 − 판관비)'의 차이를 출발 연도 수준으로
+#      유지한다. 그래서 성장률 0인 기준 시나리오는 출발 연도 영업이익을 그대로 재현한다.
 #
-#  한계
-#    매출원가·판관비 구성, 법인세, 이자비용, 설비투자(CapEx), 배당, 환율·금리,
-#    유상증자·차입 상환은 반영하지 않는다. 실제 실적 전망이 아니라 가정별 민감도 비교다.
+#  한계 (화면에도 같은 문구를 띄운다 — FPNA_LIMITS)
+#    · 매출원가 안에 섞인 감가상각비, 회사 내부의 실제 수주·CAPEX 계획은 공시되지 않는다.
+#    · DART API가 현금흐름표의 '조정' 세부 항목을 합계로만 주는 회사(예: 삼성전자)는
+#      감가상각비가 미공시로 잡혀 EBITDA·FCF가 그만큼 작게(보수적으로) 나온다.
+#    · 법인세, 배당, 차입 상환·조달, 환율·금리 변동은 반영하지 않는다.
 
 FPNA_HORIZON_YEARS = 3
 
 # 화면 슬라이더가 쓰는 가정 범위 (최소, 최대, 간격). 엔진도 같은 범위로 값을 잘라 둔다.
 FPNA_RANGES = {
-    "revenue_growth_pct": (-30.0, 40.0, 1.0),
-    "op_margin_delta_pp": (-15.0, 15.0, 0.5),
-    "ccc_delta_days": (-45.0, 45.0, 1.0),
+    "revenue_growth_pct": (-30.0, 40.0, 1.0),      # 연간 매출 성장률 (%)
+    "fixed_cost_ratio_pct": (0.0, 100.0, 5.0),     # 판관비 중 고정비 비중 (%)
+    "ccc_delta_days": (-45.0, 45.0, 1.0),          # CCC 변동 (일)
+    "capex_pct": (0.0, 30.0, 0.5),                 # 매출 대비 CAPEX (%)
 }
 
-# 3대 기본 시나리오 — 같은 가정을 모든 기업에 똑같이 적용해 비교 기준을 만든다.
+# 판관비 고정비 비중 기본값 — 회사별 공시가 없어 실무 관행값으로 둔다(화면에서 바꿀 수 있다).
+FPNA_DEFAULT_FIXED_COST_RATIO = 70.0
+
+# 3대 기본 시나리오 — 성장률과 CCC만 다르게 두고, 고정비 비중·CAPEX 비율은 기업의 기본값을 쓴다.
 FPNA_PRESETS = [
     {"key": "bear", "label": "보수적", "short": "Bear",
-     "revenue_growth_pct": -10.0, "op_margin_delta_pp": -5.0, "ccc_delta_days": 20.0},
+     "revenue_growth_pct": -10.0, "ccc_delta_days": 20.0},
     {"key": "base", "label": "기준", "short": "Base",
-     "revenue_growth_pct": 0.0, "op_margin_delta_pp": 0.0, "ccc_delta_days": 0.0},
+     "revenue_growth_pct": 0.0, "ccc_delta_days": 0.0},
     {"key": "bull", "label": "낙관적", "short": "Bull",
-     "revenue_growth_pct": 10.0, "op_margin_delta_pp": 5.0, "ccc_delta_days": -20.0},
+     "revenue_growth_pct": 10.0, "ccc_delta_days": -20.0},
 ]
 
 # 화면에 그대로 나가는 한계 고지 (면책 문구는 여기 한 곳에서만 관리한다)
 FPNA_DISCLAIMER = (
     "과거 결산 수치(최신 사업보고서)를 출발점으로 한 단순 민감도 시뮬레이션입니다. "
-    "매출 성장률·영업이익률 변동·CCC 변동 세 가지 가정만 반영하고, 매출원가·판관비 구성, 법인세, "
-    "이자비용, 설비투자(CapEx), 환율·금리, 유상증자·차입은 반영하지 않습니다. "
+    "매출 성장률·판관비 고정비 비중·CCC 변동·매출 대비 CAPEX 네 가지 가정만 반영하고, "
+    "법인세·배당·차입 상환·환율·금리는 반영하지 않습니다. "
     "실제 실적 전망이나 투자 권유가 아니며, 가정을 바꾸면 결과도 달라집니다."
 )
+
+# 외부 공시 데이터의 한계 — 화면 표 아래에 그대로 띄운다.
+FPNA_LIMITS = [
+    "매출원가 안에 포함된 감가상각비, 회사 내부의 실제 수주·CAPEX 계획은 공시되지 않습니다. "
+    "그래서 이 시뮬레이션은 '판관비 고정비 비중'과 '매출 대비 CAPEX' 가정에 기대고 있습니다.",
+    "DART 전자공시 API가 현금흐름표의 비현금조정 세부 항목을 합계로만 제공하는 회사는 감가상각비가 "
+    "미공시로 잡혀 EBITDA·FCF가 그만큼 작게(보수적으로) 계산됩니다.",
+    "3개년 모두 같은 성장률·비중을 반복 적용합니다. 실제 기업은 해마다 다르게 움직입니다.",
+]
 
 
 def _clamp_assumption(key, value, default=0.0):
@@ -1346,12 +1427,74 @@ def _clamp_assumption(key, value, default=0.0):
     return max(low, min(high, number))
 
 
+def _fpa_amount(accounts, key):
+    """계정 하나의 금액. 계정 자체가 없으면 None(0과 '미공시'를 구분한다)."""
+    item = (accounts or {}).get(key)
+    if not isinstance(item, dict):
+        return None
+    value = item.get("amount")
+    return None if value is None else float(value)
+
+
+# 차입금은 한 줄로 공시되지 않는 경우가 많아 이 네 가지를 합산한다.
+BORROWING_ACCOUNT_KEYS = ("short_term_borrowings", "long_term_borrowings",
+                          "current_lt_debt", "bonds")
+
+
+def fpa_depreciation(accounts):
+    """
+    감가상각비(유·무형자산 상각비).
+
+    '감가상각비 및 상각비'처럼 한 줄로 합쳐 공시하면 그 값을 그대로 쓰고,
+    없을 때만 (감가상각비 + 무형자산상각비 + 사용권자산감가상각비)를 더한다(중복 합산 방지).
+
+    반환: {"amount": 값 또는 None, "available": bool, "parts": {...}, "basis": "combined"/"sum"/"none"}
+    """
+    combined = _fpa_amount(accounts, "da_combined")
+    if combined:
+        return {"amount": abs(combined), "available": True,
+                "parts": {"da_combined": abs(combined)}, "basis": "combined"}
+    parts = {}
+    for key in ("depreciation", "amortization", "lease_depreciation"):
+        value = _fpa_amount(accounts, key)
+        if value:
+            parts[key] = abs(value)
+    if parts:
+        return {"amount": sum(parts.values()), "available": True, "parts": parts, "basis": "sum"}
+    return {"amount": None, "available": False, "parts": {}, "basis": "none"}
+
+
+def fpa_total_borrowings(accounts):
+    """총차입금 = 단기차입금 + 장기차입금 + 유동성장기부채 + 사채 (없으면 '차입금' 한 줄)."""
+    parts = {}
+    for key in BORROWING_ACCOUNT_KEYS:
+        value = _fpa_amount(accounts, key)
+        if value:
+            parts[key] = value
+    if parts:
+        return {"amount": sum(parts.values()), "available": True, "parts": parts}
+    direct = _fpa_amount(accounts, "borrowings")
+    if direct is not None:
+        return {"amount": direct, "available": True, "parts": {"borrowings": direct}}
+    return {"amount": None, "available": False, "parts": {}}
+
+
+def fpa_capex(accounts):
+    """설비투자(CAPEX) — 현금흐름표 '유형자산의 취득'은 보통 음수(유출)라 절댓값으로 정규화한다."""
+    value = _fpa_amount(accounts, "capex")
+    if value is None:
+        return {"amount": None, "available": False}
+    return {"amount": abs(value), "available": True}
+
+
 def fpa_baseline(company, year=None):
     """
-    시뮬레이션 출발점 — 한 기업의 특정 연도(기본: 최신 연도) 실적을 한 dict로 모은다.
+    시뮬레이션 출발점 — 한 기업의 특정 연도(기본: 최신 연도) 3표 수치를 한 dict로 모은다.
 
-    반환값의 working_capital은 '매출액 ÷ 365 × CCC'로 근사한 운전자본(원)이다.
-    CCC를 계산할 수 없는 기업(금융업 등)은 ccc·working_capital이 None이다.
+    · working_capital은 '매출액 ÷ 365 × CCC'로 근사한 운전자본(원)이다.
+    · cost_structure_available이 True면 매출원가·판관비로 이익을 계산하고,
+      False면(금융업 등 미공시) 영업이익률을 고정하는 예전 방식으로 물러난다.
+    · depreciation·capex·cash·borrowings는 미공시면 None이고 *_available로 구분한다.
     """
     years_data = (company or {}).get("years") or {}
     if not years_data:
@@ -1378,15 +1521,58 @@ def fpa_baseline(company, year=None):
     if revenue and revenue > 0 and ccc_days is not None:
         working_capital = revenue / 365.0 * ccc_days
     equity = amount("equity")
+
+    # --- 원가구조 (매출원가·판관비) ---
+    cogs = amount("cost_of_sales")
+    sgna = amount("sgna")
+    cost_structure_available = bool(
+        revenue and revenue > 0 and cogs is not None and sgna is not None and cogs > 0 and sgna > 0)
+    cogs_ratio = (cogs / revenue) if cost_structure_available else None
+    sgna_ratio = (sgna / revenue) if cost_structure_available else None
+    # 공시 영업이익과 (매출 − 매출원가 − 판관비)의 차이 = 기타손익. 출발 연도 수준으로 유지한다.
+    op_residual = (op_income - (revenue - cogs - sgna)) if (cost_structure_available
+                                                           and op_income is not None) else None
+
+    depreciation = fpa_depreciation(accounts)
+    borrowings = fpa_total_borrowings(accounts)
+    capex = fpa_capex(accounts)
+    interest = amount("interest_expense")
+    cash = amount("cash")
+    capex_ratio = (capex["amount"] / revenue * 100.0) if (capex["available"] and revenue and revenue > 0) else None
+
     return {
         "year": year,
         "revenue": revenue,
         "op_income": op_income,
         "op_margin": op_margin,
+        # 손익계산서 구조
+        "cost_of_sales": cogs,
+        "sgna": sgna,
+        "cost_structure_available": cost_structure_available,
+        "cogs_ratio": cogs_ratio,
+        "sgna_ratio": sgna_ratio,
+        "op_residual": op_residual,
+        "interest_expense": interest,
+        "interest_available": interest is not None,
+        # 재무상태표
+        "cash": cash,
+        "cash_available": cash is not None,
+        "borrowings": borrowings["amount"],
+        "borrowings_available": borrowings["available"],
+        "borrowings_parts": borrowings["parts"],
         "assets": amount("assets"),
         "liabilities": amount("liabilities"),
         "equity": equity,
+        # 현금흐름표
+        "depreciation": depreciation["amount"],
+        "depreciation_available": depreciation["available"],
+        "depreciation_basis": depreciation["basis"],
+        "depreciation_parts": depreciation["parts"],
+        "capex": capex["amount"],
+        "capex_available": capex["available"],
+        "capex_ratio": capex_ratio,
         "op_cash_flow": amount("op_cash_flow"),
+        # 운전자본(CCC)
         "dso": ccc.get("dso"),
         "dio": ccc.get("dio"),
         "dpo": ccc.get("dpo"),
@@ -1398,144 +1584,230 @@ def fpa_baseline(company, year=None):
     }
 
 
-def _fpa_scenario(baseline, key, label, revenue_growth_pct, op_margin_delta_pp,
-                  ccc_delta_days, short="", is_custom=False):
-    """한 가정 묶음을 3개년으로 펼친다(순수 계산 · 예외 없이 None으로 물러난다)."""
+def fpa_default_assumptions(baseline):
+    """슬라이더 기본값 — 고정비 비중은 관행값, CAPEX 비율은 최근 공시 CAPEX ÷ 매출."""
+    capex_pct = (baseline or {}).get("capex_ratio")
+    if capex_pct is None:
+        capex_pct = 0.0
+    return {
+        "fixed_cost_ratio_pct": FPNA_DEFAULT_FIXED_COST_RATIO,
+        "capex_pct": round(max(0.0, min(FPNA_RANGES["capex_pct"][1], capex_pct)), 1),
+    }
+
+
+def _fpa_alert(row, baseline):
+    """한 해의 경보(이자보상배율 1배 미만 / 현금 고갈) 문구. 없으면 None."""
+    alerts = []
+    if row.get("icr_alert"):
+        alerts.append("이자보상배율 %.2f배" % row["interest_coverage"])
+    if row.get("cash_alert"):
+        alerts.append("기말 현금 %s" % short_won(row.get("ending_cash")))
+    if not alerts:
+        return None
+    where = row.get("label") or ("Y+%d" % row.get("step", 0))
+    if isinstance(row.get("year"), int):
+        where = "%s(%d년)" % (where, row["year"])
+    return {"step": row.get("step"), "year": row.get("year"), "label": row.get("label"),
+            "text": "%s %s — 경보선을 넘었습니다." % (where, " · ".join(alerts))}
+
+
+def _fpa_scenario(baseline, key, label, revenue_growth_pct, fixed_cost_ratio_pct,
+                  ccc_delta_days, capex_pct, short="", is_custom=False):
+    """한 가정 묶음을 3개년 3표로 펼친다(순수 계산 · 예외 없이 None으로 물러난다)."""
     revenue0 = baseline.get("revenue")
     margin0 = baseline.get("op_margin")
-    ccc0 = baseline.get("ccc")
     growth = float(revenue_growth_pct) / 100.0
-    margin = None if margin0 is None else margin0 + float(op_margin_delta_pp)
+    fixed_ratio = max(0.0, min(100.0, float(fixed_cost_ratio_pct))) / 100.0
+    ccc0 = baseline.get("ccc")
     ccc_projected = None if ccc0 is None else ccc0 + float(ccc_delta_days)
-    wc_available = (revenue0 is not None and revenue0 > 0
-                    and ccc_projected is not None
+    wc_available = (revenue0 is not None and revenue0 > 0 and ccc_projected is not None
                     and baseline.get("working_capital") is not None)
+
+    structure = bool(baseline.get("cost_structure_available"))
+    cogs_ratio = baseline.get("cogs_ratio") or 0.0
+    sgna0 = baseline.get("sgna") or 0.0
+    sgna_fixed0 = sgna0 * fixed_ratio
+    sgna_var_ratio = (sgna0 * (1.0 - fixed_ratio) / revenue0) if revenue0 else 0.0
+    residual = baseline.get("op_residual") or 0.0
+
+    depreciation = baseline.get("depreciation")
+    interest = baseline.get("interest_expense") or 0.0
+    cash0 = baseline.get("cash")
+    capex_rate = float(capex_pct) / 100.0
 
     rows = []
     prev_wc = baseline.get("working_capital")
+    cum_fcf = 0.0
     total_revenue = 0.0
     total_op = 0.0
-    total_wc_cash = 0.0 if wc_available else None
-    total_cash = 0.0 if wc_available else None
+    total_wc_cash = 0.0
+    first_icr_alert = first_cash_alert = None
 
     for step in range(1, FPNA_HORIZON_YEARS + 1):
         revenue = revenue0 * (1.0 + growth) ** step if revenue0 is not None else None
-        op_income = (revenue * margin / 100.0) if (revenue is not None and margin is not None) else None
+
+        # --- 손익계산서 ---
+        if structure:
+            cogs = revenue * cogs_ratio
+            sgna = sgna_fixed0 + revenue * sgna_var_ratio
+            op_income = revenue - cogs - sgna + residual
+        else:
+            cogs, sgna = None, None
+            op_income = (revenue * margin0 / 100.0) if (revenue is not None and margin0 is not None) else None
+        op_margin = (op_income / revenue * 100.0) if (op_income is not None and revenue) else None
+
+        # --- 현금흐름표 ---
+        ebitda = (op_income + depreciation) if (op_income is not None and depreciation is not None) else op_income
         working_capital = (revenue / 365.0 * ccc_projected) if (wc_available and revenue is not None) else None
         delta_wc = (working_capital - prev_wc) if (working_capital is not None and prev_wc is not None) else None
-        wc_cash = -delta_wc if delta_wc is not None else None
-        cash = (op_income + wc_cash) if (op_income is not None and wc_cash is not None) else None
+        capex = revenue * capex_rate if revenue is not None else None
+        fcf = None
+        if ebitda is not None:
+            fcf = ebitda - (delta_wc or 0.0) - (capex or 0.0) - interest
+        if fcf is not None:
+            cum_fcf += fcf
+
+        # --- 재무상태표: 기초 현금 + 누적 FCF ---
+        ending_cash = (cash0 + cum_fcf) if (cash0 is not None and fcf is not None) else None
+
+        # --- 경보 ---
+        icr = (op_income / interest) if (op_income is not None and interest > 0) else None
+        icr_alert = bool(icr is not None and icr < 1.0)
+        cash_alert = bool(ending_cash is not None and ending_cash < 0)
+        if icr_alert and first_icr_alert is None:
+            first_icr_alert = step
+        if cash_alert and first_cash_alert is None:
+            first_cash_alert = step
 
         total_revenue += revenue or 0.0
         total_op += op_income or 0.0
-        if total_wc_cash is not None:
-            total_wc_cash = (total_wc_cash + wc_cash) if wc_cash is not None else None
-        if total_cash is not None:
-            total_cash = (total_cash + cash) if cash is not None else None
+        total_wc_cash -= (delta_wc or 0.0)
 
-        rows.append({
+        row = {
             "step": step,
             "year": (baseline["year"] + step) if isinstance(baseline.get("year"), int) else None,
             "label": "Y+%d" % step,
             "revenue": revenue,
+            "cost_of_sales": cogs,
+            "sgna": sgna,
             "op_income": op_income,
-            "op_margin": margin,
-            "ccc": ccc_projected,
+            "op_margin": op_margin,
+            "ebitda": ebitda,
+            "depreciation": depreciation,
             "working_capital": working_capital,
             "delta_working_capital": delta_wc,
-            "wc_cash_impact": wc_cash,
-            "cash_impact": cash,
-            "cum_cash_impact": total_cash,
-        })
+            "wc_cash_impact": None if delta_wc is None else -delta_wc,
+            "capex": capex,
+            "interest_expense": interest if interest > 0 else None,
+            "interest_coverage": icr,
+            "fcf": fcf,
+            "cum_fcf": cum_fcf if fcf is not None else None,
+            "ending_cash": ending_cash,
+            "icr_alert": icr_alert,
+            "cash_alert": cash_alert,
+        }
+        row["alert"] = _fpa_alert(row, baseline)
+        rows.append(row)
         if working_capital is not None:
             prev_wc = working_capital
 
+    alerts = [row["alert"] for row in rows if row.get("alert")]
+    last = rows[-1] if rows else {}
+    icr_values = [row["interest_coverage"] for row in rows if row.get("interest_coverage") is not None]
     return {
         "key": key,
         "label": label,
         "short": short,
         "is_custom": bool(is_custom),
         "revenue_growth_pct": float(revenue_growth_pct),
-        "op_margin_delta_pp": float(op_margin_delta_pp),
+        "fixed_cost_ratio_pct": float(fixed_cost_ratio_pct),
         "ccc_delta_days": float(ccc_delta_days),
-        "op_margin": margin,
-        "ccc": ccc_projected,
-        "years": rows,
-        "end_revenue": rows[-1]["revenue"],
-        "end_op_income": rows[-1]["op_income"],
-        "end_op_margin": margin,
-        "end_ccc": ccc_projected,
-        "total_revenue": total_revenue if revenue0 is not None else None,
-        "total_op_income": total_op if margin is not None else None,
-        "total_wc_cash_impact": total_wc_cash,
-        "cum_cash_impact": total_cash,
+        "capex_pct": float(capex_pct),
+        "assumption_text": ("성장 %+.0f%% · 고정비 %.0f%% · CCC %+.0f일 · CAPEX 매출의 %.1f%%" % (
+            revenue_growth_pct, fixed_cost_ratio_pct, ccc_delta_days, capex_pct)),
+        "cost_structure": structure,
         "wc_available": wc_available,
+        "op_margin_start": margin0,
+        "years": rows,
+        "end_revenue": last.get("revenue"),
+        "end_op_income": last.get("op_income"),
+        "end_op_margin": last.get("op_margin"),
+        "end_ebitda": last.get("ebitda"),
+        "end_cash": last.get("ending_cash"),
+        "cum_fcf": (cum_fcf if rows else None),
+        "total_revenue": total_revenue if revenue0 is not None else None,
+        "total_op_income": total_op if margin0 is not None or structure else None,
+        "total_wc_cash_impact": total_wc_cash if wc_available else None,
+        "interest_coverage_end": last.get("interest_coverage"),
+        "interest_coverage_min": min(icr_values) if icr_values else None,
+        "first_icr_alert_step": first_icr_alert,
+        "first_cash_alert_step": first_cash_alert,
+        "alert": alerts[0] if alerts else None,
+        "alert_text": (alerts[0]["text"] if alerts
+                       else "3년 안에 이자보상배율 1배 미만이나 현금 고갈에는 닿지 않습니다."),
     }
 
 
-def _fpa_insights(baseline, scenarios):
-    """시뮬레이터 아래에 붙는 핵심 인사이트 2줄(숫자 없으면 안내 문구로 대체)."""
-    by_key = {scenario["key"]: scenario for scenario in scenarios}
-    custom, base = by_key.get("custom"), by_key.get("base")
+def _fpa_insights(baseline, custom, scenarios):
+    """시뮬레이터 아래에 붙는 핵심 인사이트 2~3줄(숫자 없으면 안내 문구로 대체)."""
     lines = []
-
-    working_capital = baseline.get("working_capital")
-    ccc = baseline.get("ccc")
     revenue0 = baseline.get("revenue")
-    if working_capital is not None and ccc is not None and revenue0:
-        one_day = revenue0 / 365.0
-        lines.append(
-            "%d년 실적 기준 운전자본에 약 %s이 묶여 있습니다(매출 1일분 %s × CCC %.0f일). "
-            "CCC가 1일 길어질 때마다 매출 1일분(%s)만큼 현금이 더 묶입니다." % (
-                baseline["year"], short_won(working_capital), short_won(one_day), ccc, short_won(one_day)))
-    else:
-        lines.append(
-            "CCC를 계산할 수 없어(금융업처럼 재고자산·매출원가 미공시) 운전자본·현금 영향은 계산하지 않았습니다. "
-            "위 손익 시뮬레이션은 그대로 유효합니다.")
+    op0 = baseline.get("op_income")
+    first = ((custom or {}).get("years") or [{}])[0]
 
-    if custom and custom.get("cum_cash_impact") is not None and base and base.get("cum_cash_impact") is not None:
-        diff = custom["cum_cash_impact"] - base["cum_cash_impact"]
-        assumptions_text = "내 시나리오(성장 %+.0f%% · 영업이익률 %+.1f%%p · CCC %+.0f일)" % (
-            custom["revenue_growth_pct"], custom["op_margin_delta_pp"], custom["ccc_delta_days"])
-        if abs(diff) < 0.5e8:                    # 0.5억원 미만 차이는 '같음'으로 읽히게
+    # (1) 영업레버리지 — 매출 변화 대비 영업이익 변화
+    if (revenue0 and op0 not in (None, 0) and first.get("revenue")
+            and first.get("op_income") is not None):
+        rev_chg = (first["revenue"] / revenue0 - 1.0) * 100.0
+        op_chg = (first["op_income"] - op0) / abs(op0) * 100.0
+        if baseline.get("cost_structure_available"):
             lines.append(
-                "%s의 3년 누적 현금 영향은 %s으로, 기준 시나리오와 같습니다." % (
-                    assumptions_text, short_won(custom["cum_cash_impact"])))
+                "매출이 Y+1에 %+.1f%% 움직이면 영업이익은 %+.1f%% 움직입니다 — 판관비 중 고정비 비중 %.0f%%가 만드는 영업레버리지입니다."
+                % (rev_chg, op_chg, custom.get("fixed_cost_ratio_pct", 0.0)))
         else:
             lines.append(
-                "%s의 3년 누적 현금 영향은 %s으로, 기준 시나리오 %s보다 %s %s." % (
-                    assumptions_text, short_won(custom["cum_cash_impact"]),
-                    short_won(base["cum_cash_impact"]), short_won(abs(diff)),
-                    "많습니다" if diff > 0 else "적습니다"))
-    elif custom and custom.get("total_wc_cash_impact") is not None:
-        inflow = custom["total_wc_cash_impact"] >= 0
-        lines.append(
-            "내 시나리오에서 3년 동안 운전자본으로 %s이 %s(영업이익 제외, 순수 운전자본 현금만)." % (
-                short_won(abs(custom["total_wc_cash_impact"])),
-                "유입됩니다" if inflow else "유출됩니다"))
-    elif custom and custom.get("end_revenue") is not None and revenue0:
-        change = (custom["end_revenue"] / revenue0 - 1.0) * 100.0
-        lines.append(
-            "내 시나리오 3년 뒤(Y+3) 매출은 %s(%+.0f%%), 영업이익은 %s입니다." % (
-                short_won(custom["end_revenue"]), change, short_won(custom.get("end_op_income"))))
-
-    return lines
+                "매출원가·판관비가 공시되지 않아(금융업 등) 영업이익률을 출발 연도 수준(%s)으로 고정해 계산했습니다. 영업레버리지는 반영되지 않습니다."
+                % fmt(baseline.get("op_margin")))
+    # (2) 현금 — 누적 FCF와 기말 현금
+    cum = (custom or {}).get("cum_fcf")
+    if cum is not None:
+        end_cash = (custom or {}).get("end_cash")
+        if end_cash is not None:
+            lines.append("3년 누적 잉여현금흐름(FCF)은 %s, 기말 현금성자산은 기초 %s에서 %s이 됩니다."
+                         % (short_won(cum), short_won(baseline.get("cash")), short_won(end_cash)))
+        else:
+            lines.append("3년 누적 잉여현금흐름(FCF)은 %s입니다. 기초 현금성자산이 공시되지 않아 기말 현금 잔고는 계산하지 않았습니다."
+                         % short_won(cum))
+        if not baseline.get("depreciation_available"):
+            lines.append("감가상각비가 공시 API에 없어 EBITDA를 영업이익으로 계산했습니다 — FCF가 그만큼 보수적으로(작게) 나옵니다.")
+    elif not (custom or {}).get("wc_available"):
+        lines.append("CCC를 계산할 수 없어(금융업처럼 재고자산·매출원가 미공시) 운전자본 변동은 FCF에 넣지 않았습니다.")
+    # (3) 경보 시점
+    alert = (custom or {}).get("alert")
+    if alert:
+        lines.append("내 시나리오에서는 %s" % alert["text"])
+    elif (custom or {}).get("first_icr_alert_step") is None and (custom or {}).get("first_cash_alert_step") is None:
+        if baseline.get("interest_available") or baseline.get("cash_available"):
+            lines.append((custom or {}).get("alert_text") or "")
+    return [line for line in lines if line]
 
 
 def simulate_fpa_scenarios(company, year=None, revenue_growth_pct=0.0,
-                           op_margin_delta_pp=0.0, ccc_delta_days=0.0):
+                           fixed_cost_ratio_pct=None, ccc_delta_days=0.0, capex_pct=None):
     """
-    FP&A 3개년(YYYY+1 ~ YYYY+3) 시나리오 시뮬레이터 — 순수 결정론적 함수.
+    3표 연결형 FP&A 3개년(YYYY+1 ~ YYYY+3) 시나리오 시뮬레이터 — 순수 결정론적 함수.
 
-    최신 결산 연도의 실제 OpenDART 수치를 출발점으로, 사용자 가정(Custom)과
-    3대 기본 시나리오(보수적 Bear / 기준 Base / 낙관적 Bull)를 같은 규칙으로 펼쳐 비교한다.
+    최신 결산 연도의 실제 OpenDART 수치(손익계산서·재무상태표·현금흐름표)를 출발점으로,
+    사용자 가정(Custom)과 3대 기본 시나리오(보수적 Bear / 기준 Base / 낙관적 Bull)를
+    같은 규칙으로 펼쳐 비교한다.
 
     입력
         company              : build_analysis()의 기업 dict (years·accounts·ratios·ccc 사용)
         year                 : 출발 연도 (기본: 최신 연도)
         revenue_growth_pct   : 연간 매출 성장률 % (−30 ~ +40으로 자름)
-        op_margin_delta_pp   : 영업이익률 변동 %p (−15 ~ +15로 자름)
+        fixed_cost_ratio_pct : 판관비 중 고정비 비중 % (0 ~ 100, 기본 70)
         ccc_delta_days       : CCC 변동 일수 (−45 ~ +45로 자름)
+        capex_pct            : 매출 대비 CAPEX % (0 ~ 30, 기본 최근 공시 CAPEX ÷ 매출, 미공시면 0)
 
     반환값 (status)
         "ok"        : 정상 계산. scenarios[0..2]=보수적·기준·낙관적, custom=내 시나리오
@@ -1543,20 +1815,30 @@ def simulate_fpa_scenarios(company, year=None, revenue_growth_pct=0.0,
         "no_data"   : 재무제표 연도 자체가 없음
 
     주의: 자본잠식(자본총계 0 이하)이거나 영업적자여도 나눗셈이 없어 그대로 계산된다.
-          CCC 미공시(금융업 등)면 손익만 계산하고 운전자본·현금 항목은 None이 된다.
+          이자비용이 0이나 미공시면 이자보상배율은 None(경보 판정 불가)이고,
+          현금성자산 미공시면 기말 현금도 None이다. 예외는 던지지 않는다.
     """
     baseline = fpa_baseline(company, year)
+    defaults = fpa_default_assumptions(baseline) if baseline else {
+        "fixed_cost_ratio_pct": FPNA_DEFAULT_FIXED_COST_RATIO, "capex_pct": 0.0}
     assumptions = {
         "revenue_growth_pct": _clamp_assumption("revenue_growth_pct", revenue_growth_pct),
-        "op_margin_delta_pp": _clamp_assumption("op_margin_delta_pp", op_margin_delta_pp),
+        "fixed_cost_ratio_pct": _clamp_assumption(
+            "fixed_cost_ratio_pct",
+            defaults["fixed_cost_ratio_pct"] if fixed_cost_ratio_pct is None else fixed_cost_ratio_pct,
+            default=FPNA_DEFAULT_FIXED_COST_RATIO),
         "ccc_delta_days": _clamp_assumption("ccc_delta_days", ccc_delta_days),
+        "capex_pct": _clamp_assumption(
+            "capex_pct", defaults["capex_pct"] if capex_pct is None else capex_pct),
     }
     empty = {
         "status": "no_data", "message": "재무제표 연도가 없어 시뮬레이션할 수 없습니다.",
         "baseline": None, "base_year": None, "horizon": FPNA_HORIZON_YEARS,
-        "assumptions": assumptions, "scenarios": [], "custom": None,
-        "insights": [], "note": FPNA_DISCLAIMER,
+        "assumptions": assumptions, "defaults": defaults, "scenarios": [], "custom": None,
+        "insights": [], "note": FPNA_DISCLAIMER, "limits": list(FPNA_LIMITS),
         "wc_available": False, "capital_impaired": False, "op_loss": False,
+        "cost_structure": False, "cash_available": False,
+        "depreciation_available": False, "interest_available": False,
     }
     if not baseline:
         return empty
@@ -1569,18 +1851,23 @@ def simulate_fpa_scenarios(company, year=None, revenue_growth_pct=0.0,
             "baseline": baseline, "base_year": baseline.get("year"),
             "capital_impaired": baseline.get("capital_impaired", False),
             "op_loss": baseline.get("op_loss", False),
+            "cost_structure": bool(baseline.get("cost_structure_available")),
+            "cash_available": bool(baseline.get("cash_available")),
+            "depreciation_available": bool(baseline.get("depreciation_available")),
+            "interest_available": bool(baseline.get("interest_available")),
         })
         return empty
 
     scenarios = [
         _fpa_scenario(baseline, preset["key"], preset["label"], preset["revenue_growth_pct"],
-                      preset["op_margin_delta_pp"], preset["ccc_delta_days"],
-                      short=preset.get("short", ""), is_custom=False)
+                      assumptions["fixed_cost_ratio_pct"], preset["ccc_delta_days"],
+                      assumptions["capex_pct"], short=preset.get("short", ""), is_custom=False)
         for preset in FPNA_PRESETS
     ]
     custom = _fpa_scenario(
         baseline, "custom", "내 시나리오",
-        assumptions["revenue_growth_pct"], assumptions["op_margin_delta_pp"], assumptions["ccc_delta_days"],
+        assumptions["revenue_growth_pct"], assumptions["fixed_cost_ratio_pct"],
+        assumptions["ccc_delta_days"], assumptions["capex_pct"],
         short="Custom", is_custom=True)
     scenarios.append(custom)
 
@@ -1591,17 +1878,22 @@ def simulate_fpa_scenarios(company, year=None, revenue_growth_pct=0.0,
         "horizon": FPNA_HORIZON_YEARS,
         "baseline": baseline,
         "assumptions": assumptions,
+        "defaults": defaults,
         "scenarios": scenarios,
         "custom": custom,
-        "insights": _fpa_insights(baseline, scenarios),
+        "insights": _fpa_insights(baseline, custom, scenarios),
         "note": FPNA_DISCLAIMER,
+        "limits": list(FPNA_LIMITS),
         "wc_available": bool(custom.get("wc_available")),
         "capital_impaired": bool(baseline.get("capital_impaired")),
         "op_loss": bool(baseline.get("op_loss")),
+        "cost_structure": bool(baseline.get("cost_structure_available")),
+        "cash_available": bool(baseline.get("cash_available")),
+        "depreciation_available": bool(baseline.get("depreciation_available")),
+        "interest_available": bool(baseline.get("interest_available")),
     }
 
 
-# ---------------------------------------------------------------------------
 # 4-2. 5대 재무 리스크 진단 (신호등 + 100점 종합 점수)
 # ---------------------------------------------------------------------------
 #
