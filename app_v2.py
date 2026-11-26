@@ -622,6 +622,18 @@ def render_hero():
     st.markdown(HERO_TMPL, unsafe_allow_html=True)
 
 
+def card_container(key):
+    """
+    가운데 카드 컨테이너. key를 주면 Streamlit이 `st-key-<key>` CSS 클래스를 붙여
+    CSS로 카드 모양(둥근 모서리·그림자·여백)을 입힐 수 있다.
+    key 인자를 모르는 옛 Streamlit에서는 스타일만 빠지고 화면은 그대로 동작한다.
+    """
+    try:
+        return st.container(key=key)
+    except TypeError:
+        return st.container()
+
+
 def center_columns():
     """가운데 정렬용 3분할 (가운데 열에서 입력 카드를 그린다)."""
     return st.columns([1, 2.5, 1])
@@ -645,7 +657,7 @@ def render_key_gate():
     """인증키가 secrets·환경변수 어디에도 없을 때 — 중앙 카드 하단 expander에서 직접 입력."""
     _left, middle, _right = center_columns()
     with middle:
-        with st.container(key="fs2-keycard"):
+        with card_container("fs2-keycard"):
             st.markdown(
                 '<div class="fs-card-title">OpenDART 인증키가 필요합니다</div>'
                 '<div class="fs-card-sub">공시 데이터를 받아오려면 금융감독원 OpenDART 인증키가 있어야 합니다. '
@@ -671,7 +683,7 @@ def render_key_gate():
 def render_corp_load_error(error):
     _left, middle, _right = center_columns()
     with middle:
-        with st.container(key="fs2-keycard"):
+        with card_container("fs2-keycard"):
             st.markdown('<div class="fs-card-title">기업 목록을 불러오지 못했습니다</div>'
                         '<div class="fs-card-sub">인증키 상태나 네트워크를 확인해 주세요. '
                         'OpenDART는 하루 20,000건까지 호출할 수 있습니다.</div>',
@@ -703,7 +715,7 @@ def render_input_card(corp_list, api_key, key_source):
 
     _left, middle, _right = center_columns()
     with middle:
-        with st.container(key="fs2-inputcard"):
+        with card_container("fs2-inputcard"):
             st.markdown(
                 '<div class="fs-card-title">분석할 기업을 골라 주세요</div>'
                 '<div class="fs-card-sub">한 기업만 봐도 되고, 경쟁사와 나란히 비교할 수도 있습니다.</div>',
