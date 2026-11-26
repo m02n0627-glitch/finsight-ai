@@ -15,9 +15,11 @@ analyzer.py 계산 함수 단위 테스트 (pytest)
 각 테스트의 기댓값은 주석에 계산 과정을 적어 두었다(계산기 검산값).
 """
 
+import json
 import os
 import re
 import sys
+import urllib.error
 
 import pytest
 
@@ -1247,3 +1249,366 @@ def test_capital_impairment_forces_danger_grade_even_with_high_score():
     assert risk["grade"] == "danger"    # 그래도 자본잠식이면 위험
     assert "자본잠식" in risk["comment"]
     assert "점수와 무관하게 위험 등급" in risk["comment"]
+
+
+# ---------------------------------------------------------------------------
+# 4-4. 동종업계(피어) 자동 비교
+#   · 업종 매핑 시드 → 피어 선정(동일 코드 → 3자리 → 2자리, 지주회사 분리)
+#   · 지표 비교(평균·중앙값·순위) 및 API 실패 시 폴백
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _isolate_industry_seed(monkeypatch):
+    """업종 시드·캐시를 테스트마다 비운다. (실제 시드 파일은 별도 테스트가 직접 읽는다)"""
+    monkeypatch.setattr(fs, "_INDUSTRY_SEED", {})
+    fs._INDUSTRY_PROFILE_CACHE.clear()
+    fs._PEER_METRICS_CACHE.clear()
+    yield
+    fs._INDUSTRY_PROFILE_CACHE.clear()
+    fs._PEER_METRICS_CACHE.clear()
+
+
+def industry_record(corp_code, name, induty_code, order, stock_code="", sector=""):
+    """시드 한 줄과 같은 모양의 dict."""
+    return {"corp_code": corp_code, "corp_name": name, "stock_code": stock_code,
+            "induty_code": induty_code, "industry_name": "", "sector": sector, "order": order}
+
+
+def peer_company(name, corp_code, stock_code, accounts):
+    """한 해짜리 기업 dict — 비율·CCC까지 계산해 둔다."""
+    years_data, years = make_years({2025: accounts})
+    fs.compute_ratios(years_data, years)
+    fs.compute_working_capital(years_data, years)
+    return {"name": name, "corp_code": corp_code, "stock_code": stock_code, "years": years_data}
+
+
+def test_display_name_strips_corporate_suffix():
+    assert fs.display_name("삼성전자(주)") == "삼성전자"
+    assert fs.display_name("주식회사 크래프톤") == "크래프톤"
+    assert fs.display_name("(주)KB금융지주") == "KB금융지주"
+    assert fs.display_name("") == ""
+
+
+def test_industry_seed_file_shipped():
+    """저장소에 동봉한 업종 시드 — 80개사 이상, 필수 필드, API 키 없음."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "industry_map_seed.json")
+    seed = fs.read_industry_seed(path)
+    assert len(seed) >= 80
+
+    samsung = seed["00126380"]
+    assert samsung["stock_code"] == "005930"
+    assert samsung["induty_code"] == "264"
+
+    # statement_links_seed.json 의 40개사가 모두 들어 있어야 한다(업종 비교 대상 확보)
+    with open(os.path.join(os.path.dirname(path), "statement_links_seed.json"), encoding="utf-8") as fp:
+        links_seed = json.load(fp)
+    missing = [row["corp_name"] for row in links_seed["companies"]
+               if row["corp_code"] not in seed]
+    assert missing == []
+
+    for record in seed.values():
+        assert record["corp_code"] and record["stock_code"] and record["induty_code"]
+
+    with open(path, encoding="utf-8") as fp:
+        raw = fp.read()
+    assert not re.search(r"[0-9a-f]{40}", raw)          # 40자리 인증키 형태 없음
+    assert "crtfc_key" not in raw
+
+
+def test_industry_seed_missing_or_broken_is_empty(tmp_path):
+    assert fs.read_industry_seed(str(tmp_path / "nope.json")) == {}
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    assert fs.read_industry_seed(str(broken)) == {}
+    wrong = tmp_path / "wrong.json"
+    wrong.write_text('{"companies": "nope"}', encoding="utf-8")
+    assert fs.read_industry_seed(str(wrong)) == {}
+
+
+def test_industry_record_finds_by_corp_code_then_stock_code():
+    fs._INDUSTRY_SEED = {
+        "00126380": industry_record("00126380", "삼성전자(주)", "264", 1, "005930", "반도체·전자"),
+        "00164779": industry_record("00164779", "에스케이하이닉스(주)", "2612", 2, "000660"),
+    }
+    assert fs.industry_record("00126380")["induty_code"] == "264"
+    assert fs.industry_record(None, "000660")["induty_code"] == "2612"
+    assert fs.industry_record("00000000") is None
+
+
+def test_peer_match_levels():
+    assert fs.peer_match("264", "264") == "same"
+    assert fs.peer_match("264", "2641") == "three"      # 앞 3자리가 같다
+    assert fs.peer_match("2612", "261") == "three"
+    assert fs.peer_match("2612", "262") == "two"   # 3자리가 달라 2자리까지 넓힌다
+    assert fs.peer_match("2612", "26") == "two"
+    assert fs.peer_match("264", "30121") is None
+    assert fs.peer_match("", "264") is None
+
+
+def test_select_industry_peers_fills_exact_code_first_then_widens():
+    records = [
+        industry_record("A", "대상", "264", 1),
+        industry_record("B", "같은코드", "264", 2),
+        industry_record("C", "삼자리", "2641", 3),
+        industry_record("D", "이자리", "2612", 4),
+        industry_record("E", "다른업종", "30121", 5),
+    ]
+    selection = fs.select_industry_peers("264", records, exclude_codes=["A"], max_peers=3)
+    assert [p["corp_code"] for p in selection["peers"]] == ["B", "C", "D"]
+    assert [p["match"] for p in selection["peers"]] == ["same", "three", "two"]
+    assert selection["levels"] == {"same": 1, "three": 1, "two": 1}
+
+
+def test_select_industry_peers_respects_max_three_and_curated_order():
+    records = [industry_record("A", "대상", "108", 1)]
+    records += [industry_record("P%d" % index, "피어%d" % index, "108", 10 + index)
+                for index in range(1, 6)]
+    selection = fs.select_industry_peers("108", records, exclude_codes=["A"])
+    # 같은 코드 후보가 5개라도 최대 3개사, 시드 순서(대표성)대로
+    assert [p["corp_code"] for p in selection["peers"]] == ["P1", "P2", "P3"]
+
+
+def test_select_industry_peers_excludes_holding_companies_from_normal_peers():
+    records = [
+        industry_record("A", "대상", "264", 1),
+        industry_record("H", "지주회사", "64992", 2),
+        industry_record("B", "피어", "264", 3),
+    ]
+    selection = fs.select_industry_peers("264", records, exclude_codes=["A"])
+    assert [p["corp_code"] for p in selection["peers"]] == ["B"]
+    assert selection["excluded_holdings"] == 1
+
+
+def test_select_industry_peers_of_holding_company_compares_holdings_only():
+    records = [
+        industry_record("KB", "KB금융지주", "64992", 5, sector="금융"),
+        industry_record("SH", "신한금융지주", "64992", 6, sector="금융"),
+        industry_record("LG", "LG", "64992", 1, sector="지주"),
+        industry_record("SEC", "삼성전자", "264", 2),
+    ]
+    selection = fs.select_industry_peers("64992", records, exclude_codes=["KB"], target_sector="금융")
+    # 64992 가 아닌 삼성전자는 빠지고, 같은 업종군(금융) 지주회사가 먼저 온다
+    assert [p["corp_code"] for p in selection["peers"]] == ["SH", "LG"]
+    assert all(p["induty_code"] == "64992" for p in selection["peers"])
+
+
+def test_select_industry_peers_without_code_is_empty():
+    selection = fs.select_industry_peers("", [industry_record("A", "대상", "264", 1)])
+    assert selection["peers"] == []
+
+
+def test_compare_peers_mean_median_rank_and_missing_values():
+    target = {"op_margin": 12.3, "roe": 8.4, "debt_ratio": 25.1,
+              "current_ratio": 250.3, "ccc": 92.0}
+    peers = [
+        {"metrics": {"op_margin": 6.0, "roe": 5.0, "debt_ratio": 40.0,
+                     "current_ratio": 180.0, "ccc": 110.0}},
+        {"metrics": {"op_margin": 8.1, "roe": 9.0, "debt_ratio": 55.0,
+                     "current_ratio": 250.0, "ccc": 80.0}},
+        {"metrics": {"op_margin": 10.5, "roe": 12.0, "debt_ratio": 30.0,
+                     "current_ratio": 300.0, "ccc": None}},
+    ]
+    rows = {row["key"]: row for row in fs.compare_peers(target, peers)}
+
+    assert rows["op_margin"]["mean"] == pytest.approx((6.0 + 8.1 + 10.5) / 3)
+    assert rows["op_margin"]["median"] == 8.1
+    assert rows["op_margin"]["rank"] == 1                 # 피어 중 가장 높다
+    assert rows["op_margin"]["total"] == 4
+
+    # 부채비율은 낮을수록 좋다 → 25.1%는 1위
+    assert rows["debt_ratio"]["rank"] == 1
+    # CCC는 3번째 피어에 값이 없어 평균은 2개사로만 계산하고, 순위 모집단도 3개사
+    assert rows["ccc"]["mean"] == pytest.approx(95.0)
+    assert rows["ccc"]["rank"] == 2
+    assert rows["ccc"]["total"] == 3
+
+
+def test_compare_peers_without_peer_values_has_no_rank():
+    rows = {row["key"]: row for row in fs.compare_peers(
+        {"op_margin": 5.0}, [{"metrics": {"op_margin": None}}])}
+    assert rows["op_margin"]["mean"] is None
+    assert rows["op_margin"]["rank"] is None
+
+
+def test_make_industry_comment_uses_median_and_rank():
+    target = {"op_margin": 13.0, "roe": 10.4, "debt_ratio": 29.9,
+              "current_ratio": 232.8, "ccc": 127.0}
+    peers = [
+        {"metrics": {"op_margin": 37.0, "roe": 33.0, "debt_ratio": 45.0,
+                     "current_ratio": 185.8, "ccc": 113.0}},
+        {"metrics": {"op_margin": 6.0, "roe": 9.0, "debt_ratio": 140.0,
+                     "current_ratio": 130.0, "ccc": None}},
+        {"metrics": {"op_margin": 8.1, "roe": 7.5, "debt_ratio": 49.0,
+                     "current_ratio": 185.8, "ccc": None}},
+    ]
+    rows = fs.compare_peers(target, peers)
+    comment = fs.make_industry_comment(rows, "삼성전자", 3, 2025)
+    assert "2025년 삼성전자" in comment
+    assert "중앙값" in comment
+    assert "위" in comment
+
+    # 피어 값이 하나도 없으면 계산하지 않고 안내만 한다
+    empty = fs.make_industry_comment(fs.compare_peers({}, peers), "삼성전자", 3, 2025)
+    assert "계산하지 못했습니다" in empty
+
+
+def test_make_industry_comment_almost_equal_uses_plain_wording():
+    target = {"op_margin": 8.1}
+    peers = [{"metrics": {"op_margin": 8.1}}, {"metrics": {"op_margin": 8.1}}]
+    comment = fs.make_industry_comment(fs.compare_peers(target, peers), "테스트", 2, 2025)
+    assert "거의 같습니다" in comment
+
+
+PEER_SEED = {
+    "00126380": industry_record("00126380", "삼성전자(주)", "264", 1, "005930", "반도체·전자"),
+    "00066000": industry_record("00066000", "LG전자(주)", "264", 3, "066570", "반도체·전자"),
+    "00164779": industry_record("00164779", "SK하이닉스(주)", "2612", 2, "000660", "반도체·전자"),
+    "00000003": industry_record("00000003", "삼성전기(주)", "2622", 4, "009150", "반도체·전자"),
+}
+
+SAMSUNG_ACCOUNTS = {"revenue": 300000, "op_income": 39000, "net_income": 31000,
+                    "assets": 500000, "current_assets": 200000, "liabilities": 90000,
+                    "current_liab": 86000, "equity": 410000,
+                    "cost_of_sales": 200000, "receivables": 40000,
+                    "inventory": 30000, "payables": 25000}
+
+
+def peer_statement_factory(accounts_by_code):
+    def fake_fetch_statement(api_key, corp_code, year, fs_div_pref=("CFS", "OFS")):
+        accounts = accounts_by_code[corp_code]
+        return "CFS", "연결재무제표", "2025%08d" % int(corp_code[-3:] or 0), \
+            {key: {"amount": value} for key, value in accounts.items()}
+    return fake_fetch_statement
+
+
+def test_build_industry_comparison_ok(monkeypatch):
+    fs._INDUSTRY_SEED = PEER_SEED
+    target = peer_company("삼성전자", "00126380", "005930", SAMSUNG_ACCOUNTS)
+    analysis = {"companies": [target], "years": [2025]}
+
+    monkeypatch.setattr(fs, "fetch_statement", peer_statement_factory({
+        "00066000": {"revenue": 100000, "op_income": 8000, "net_income": 6000,
+                     "assets": 120000, "current_assets": 40000, "liabilities": 60000,
+                     "current_liab": 30000, "equity": 60000,
+                     "cost_of_sales": 70000, "receivables": 15000,
+                     "inventory": 20000, "payables": 12000},
+        "00164779": {"revenue": 80000, "op_income": 20000, "net_income": 18000,
+                     "assets": 140000, "current_assets": 70000, "liabilities": 50000,
+                     "current_liab": 25000, "equity": 90000,
+                     "cost_of_sales": 50000, "receivables": 18000,
+                     "inventory": 22000, "payables": 14000},
+        "00000003": {"revenue": 50000, "op_income": 4000, "net_income": 3000,
+                     "assets": 60000, "current_assets": 25000, "liabilities": 20000,
+                     "current_liab": 12000, "equity": 40000,
+                     "cost_of_sales": 38000, "receivables": 9000,
+                     "inventory": 8000, "payables": 6000},
+    }))
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+
+    result = fs.build_industry_comparison("key", analysis)
+    assert result["status"] == "ok"
+    assert result["induty_code"] == "264"
+    assert result["code_source"] == "seed"
+    assert [peer["name"] for peer in result["peers"]] == ["LG전자", "SK하이닉스", "삼성전기"]
+    assert [peer["match"] for peer in result["peers"]] == ["same", "two", "two"]
+
+    rows = {row["key"]: row for row in result["rows"]}
+    # 영업이익률: 삼성전자 39000/300000 = 13.0%
+    assert rows["op_margin"]["target"] == pytest.approx(13.0)
+    assert rows["op_margin"]["mean"] == pytest.approx((8.0 + 25.0 + 8.0) / 3)
+    assert "삼성전자" in result["comment"]
+
+
+def test_build_industry_comparison_without_code(monkeypatch):
+    fs._INDUSTRY_SEED = {}
+    target = peer_company("새회사", "99999999", "", SAMSUNG_ACCOUNTS)
+    monkeypatch.setattr(fs, "industry_profile", lambda *a, **k: None)
+    result = fs.build_industry_comparison("key", {"companies": [target], "years": [2025]})
+    assert result["status"] == "no_code"
+
+
+def test_build_industry_comparison_without_peers():
+    fs._INDUSTRY_SEED = {"00126380": PEER_SEED["00126380"]}
+    target = peer_company("삼성전자", "00126380", "005930", SAMSUNG_ACCOUNTS)
+    result = fs.build_industry_comparison("key", {"companies": [target], "years": [2025]})
+    assert result["status"] == "no_peers"
+    assert result["induty_code"] == "264"
+
+
+def test_build_industry_comparison_skips_peer_without_financials(monkeypatch):
+    fs._INDUSTRY_SEED = PEER_SEED
+    target = peer_company("삼성전자", "00126380", "005930", SAMSUNG_ACCOUNTS)
+    good = peer_statement_factory({
+        "00164779": {"revenue": 80000, "op_income": 20000, "net_income": 18000,
+                     "assets": 140000, "current_assets": 70000, "liabilities": 50000,
+                     "current_liab": 25000, "equity": 90000},
+    })
+
+    def fake_fetch_statement(api_key, corp_code, year, fs_div_pref=("CFS", "OFS")):
+        if corp_code in ("00066000", "00000003"):
+            raise fs.DartError("조회된 데이터가 없습니다.", status="013")
+        return good(api_key, corp_code, year)
+
+    monkeypatch.setattr(fs, "fetch_statement", fake_fetch_statement)
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+
+    result = fs.build_industry_comparison("key", {"companies": [target], "years": [2025]})
+    assert result["status"] == "ok"
+    assert len(result["peers"]) == 1
+    assert sorted(result["skipped"]) == ["LG전자", "삼성전기"]
+
+
+def test_build_industry_comparison_survives_all_peer_failures(monkeypatch):
+    fs._INDUSTRY_SEED = PEER_SEED
+    target = peer_company("삼성전자", "00126380", "005930", SAMSUNG_ACCOUNTS)
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr(fs, "fetch_statement", boom)
+    monkeypatch.setattr(fs, "fetch_extra_accounts", boom)
+    result = fs.build_industry_comparison("key", {"companies": [target], "years": [2025]})
+    assert result["status"] == "no_data"
+
+
+def test_build_industry_comparison_never_raises(monkeypatch):
+    fs._INDUSTRY_SEED = PEER_SEED
+    target = peer_company("삼성전자", "00126380", "005930", SAMSUNG_ACCOUNTS)
+
+    def boom(*args, **kwargs):
+        raise ValueError("예상 못 한 오류")
+
+    monkeypatch.setattr(fs, "select_industry_peers", boom)
+    result = fs.build_industry_comparison("key", {"companies": [target], "years": [2025]})
+    assert result["status"] == "error"
+    assert "예상 못 한 오류" in result["reason"]
+
+
+def test_build_analysis_attaches_peers_only_for_single_company(monkeypatch):
+    """단일 기업이면 동종업계 비교를 붙이고, 두 기업 비교면 붙이지 않는다."""
+    monkeypatch.setattr(fs, "fetch_disclosure_risks", lambda *a, **k: {"status": "clear", "matches": []})
+
+    def fake_collect(api_key, corp, years, verbose=True):
+        company = peer_company(corp["corp_name"], corp["corp_code"], corp["stock_code"], SAMSUNG_ACCOUNTS)
+        company["years"] = {year: dict(company["years"][2025]) for year in years}
+        company["latest_rcept_no"] = ""
+        company["fs_nm"] = "연결재무제표"
+        company["statement_links"] = {year: {"main": ""} for year in years}
+        for year in years:
+            company["years"][year]["statement_links"] = company["statement_links"][year]
+        return company
+
+    monkeypatch.setattr(fs, "collect_company", fake_collect)
+    monkeypatch.setattr(fs, "fetch_statement_links", lambda *a, **k: {"main": ""})
+    monkeypatch.setattr(fs, "build_industry_comparison", lambda *a, **k: {"status": "ok", "comment": "비교"})
+
+    single = fs.build_analysis("key", [{"corp_name": "삼성전자", "corp_code": "00126380",
+                                        "stock_code": "005930"}], [2024, 2025], verbose=False)
+    assert single["industry_peers"]["status"] == "ok"
+
+    twice = fs.build_analysis("key", [
+        {"corp_name": "삼성전자", "corp_code": "00126380", "stock_code": "005930"},
+        {"corp_name": "LG전자", "corp_code": "00066000", "stock_code": "066570"},
+    ], [2024, 2025], verbose=False)
+    assert twice["industry_peers"] is None

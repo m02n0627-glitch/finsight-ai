@@ -10,6 +10,8 @@ OpenDART(금융감독원 전자공시시스템) 오픈 API로 상장사의 사�
   * 외부 패키지 설치 없이 파이썬 표준 라이브러리만 사용한다. (Python 3.8 이상)
   * 회사 이름만 넣으면 corpCode.xml(전체 기업 고유번호)을 내려받아 자동으로 찾아준다.
   * 연결재무제표(CFS)를 우선 사용하고, 없으면 별도재무제표(OFS)로 대체한다.
+  * 한 기업만 분석하면 같은 업종 상장사(최대 3개사)를 자동으로 골라 동종업계 비교를 붙인다.
+    (업종 코드는 company.json, 시드는 industry_map_seed.json — 실패해도 본 분석은 그대로)
 
 사용 예시
 ---------
@@ -36,6 +38,7 @@ import io
 import json
 import os
 import re
+import statistics
 import sys
 import time
 import unicodedata
@@ -1747,6 +1750,449 @@ def disclosure_coverage(disclosure):
 
 
 # ---------------------------------------------------------------------------
+# 4-4. 동종업계(피어) 자동 비교
+# ---------------------------------------------------------------------------
+#
+# "이 회사가 업종 안에서 어디쯤인가"를 보려면 같은 업종의 다른 상장사와 나란히 놓아야 한다.
+# 그런데 OpenDART는 업종코드만 주고 '비교 대상'은 정해 주지 않는다. 여기서 정하는 규칙은 셋이다.
+#
+#   1) 업종 코드 : company.json 의 induty_code(KSIC 10차 기준, 2~5자리 혼재).
+#      저장소 시드(industry_map_seed.json, 118개사)를 먼저 보고, 없으면 company.json 실시간 조회.
+#   2) 피어 선정 : 동일 코드 → 같은 3자리 → 같은 2자리 순으로 최대 3개사.
+#      같은 단계 안에서는 시드의 표본 순서(= 업종별 규모가 큰 회사를 앞에 둔 순서)를 따른다.
+#      지주회사(64992)는 자회사 업종이 제각각이라 일반 기업 피어에서 빼고, 지주회사끼리만 비교한다.
+#   3) 비교 지표 : 영업이익률 · ROE · 부채비율 · 유동비율 · CCC (최신 기준 연도).
+#      피어 평균은 값이 있는 피어만으로 계산하고(없는 값은 분모에서 제외), 순위는 피어를 포함해 매긴다.
+#
+# 네트워크·API가 실패해도 본 분석은 그대로 진행된다(동종업계 비교는 참고 정보이므로 예외를 밖으로 내보내지 않는다).
+
+INDUSTRY_SEED_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "industry_map_seed.json"
+)
+INDUSTRY_HOLDING_CODE = "64992"     # KSIC 10차 '지주회사' — 업종이 섞이는 코드
+PEER_MAX = 3                        # 자동 선정하는 대표 피어 수
+PEER_MATCH_LABEL = {"same": "동일 코드", "three": "같은 3자리", "two": "같은 2자리"}
+
+# (키, 표 이름, 단위, 높을수록 좋은가, 소수 자리)
+PEER_METRICS = (
+    ("op_margin", "영업이익률", "%", True, 1),
+    ("roe", "ROE", "%", True, 1),
+    ("debt_ratio", "부채비율", "%", False, 1),
+    ("current_ratio", "유동비율", "%", True, 1),
+    ("ccc", "CCC", "일", False, 0),
+)
+
+_INDUSTRY_SEED = None          # {corp_code: record} — 파일은 한 번만 읽는다
+_INDUSTRY_PROFILE_CACHE = {}   # corp_code → company.json 결과 | None
+_PEER_METRICS_CACHE = {}       # (corp_code, 연도) → 지표 dict | None
+
+
+def display_name(name):
+    """DART 정식명 → 화면용 이름. ('삼성전자(주)' → '삼성전자', '주식회사 크래프톤' → '크래프톤')"""
+    raw = str(name or "").strip()
+    for token in ("(주)", "㈜", "주식회사"):
+        raw = raw.replace(token, "")
+    return raw.strip() or str(name or "")
+
+
+def read_industry_seed(path=INDUSTRY_SEED_FILE):
+    """업종 시드 JSON → {corp_code: record}. 파일이 없거나 깨졌으면 빈 dict(→ 실시간 조회로 넘어감)."""
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            data = json.load(fp)
+    except (OSError, ValueError):
+        return {}
+    rows = data.get("companies") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    seed = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        corp_code = str(row.get("corp_code") or "").strip()
+        induty_code = str(row.get("induty_code") or "").strip()
+        if not corp_code or not induty_code:
+            continue
+        seed[corp_code] = {
+            "corp_code": corp_code,
+            "corp_name": row.get("corp_name") or "",
+            "stock_code": str(row.get("stock_code") or "").strip(),
+            "induty_code": induty_code,
+            "industry_name": row.get("industry_name") or "",
+            "sector": row.get("sector") or "",
+            "order": row.get("order"),
+        }
+    return seed
+
+
+def industry_seed():
+    """저장소 시드를 한 번만 읽어 캐시한다(테스트는 이 값을 바로 바꿔도 된다)."""
+    global _INDUSTRY_SEED
+    if _INDUSTRY_SEED is None:
+        _INDUSTRY_SEED = read_industry_seed()
+    return _INDUSTRY_SEED
+
+
+def industry_record(corp_code=None, stock_code=None):
+    """시드에서 기업 하나의 업종 정보를 찾는다. (corp_code 우선, 없으면 종목코드)"""
+    seed = industry_seed()
+    code = str(corp_code or "").strip()
+    if code and code in seed:
+        return seed[code]
+    stock = str(stock_code or "").strip()
+    if stock:
+        for record in seed.values():
+            if record.get("stock_code") == stock:
+                return record
+    return None
+
+
+def industry_profile(api_key, corp_code):
+    """시드에 없는 기업의 업종코드를 company.json 으로 조회한다. 실패하면 None."""
+    code = str(corp_code or "").strip()
+    if not code or not api_key:
+        return None
+    if code in _INDUSTRY_PROFILE_CACHE:
+        return _INDUSTRY_PROFILE_CACHE[code]
+    profile = None
+    try:
+        result = call_json("company.json", {"crtfc_key": api_key, "corp_code": code})
+        induty_code = str(result.get("induty_code") or "").strip()
+        if result.get("status") == "000" and induty_code:
+            profile = {
+                "corp_code": code,
+                "corp_name": result.get("corp_name") or "",
+                "stock_code": result.get("stock_code") or "",
+                "induty_code": induty_code,
+                "industry_name": "",
+                "sector": "",
+                "order": None,
+            }
+    except (DartError, RuntimeError, urllib.error.URLError, OSError):
+        profile = None
+    _INDUSTRY_PROFILE_CACHE[code] = profile
+    return profile
+
+
+def industry_code_for(api_key, company):
+    """기업 dict → (업종코드, 시드/조회 레코드, 출처: 'seed'|'live'). 못 찾으면 (None, None, None)."""
+    company = company or {}
+    record = industry_record(company.get("corp_code"), company.get("stock_code"))
+    if record:
+        return record.get("induty_code"), record, "seed"
+    profile = industry_profile(api_key, company.get("corp_code"))
+    if profile:
+        return profile.get("induty_code"), profile, "live"
+    return None, None, None
+
+
+def peer_match(target_code, code):
+    """
+    업종코드 근접도.
+        same  = 완전히 같은 코드
+        three = 앞 3자리(소분류)까지 같음
+        two   = 앞 2자리(중분류)까지 같음
+    """
+    a = str(target_code or "").strip()
+    b = str(code or "").strip()
+    if not a or not b:
+        return None
+    if a == b:
+        return "same"
+    if len(a) >= 3 and len(b) >= 3 and a[:3] == b[:3]:
+        return "three"
+    if len(a) >= 2 and len(b) >= 2 and a[:2] == b[:2]:
+        return "two"
+    return None
+
+
+def select_industry_peers(target_code, records, exclude_codes=(), max_peers=PEER_MAX, target_sector=""):
+    """
+    같은 업종의 대표 피어를 최대 max_peers 개 고른다.
+
+    반환: {code, peers:[{corp_code, corp_name, name, stock_code, induty_code, match, match_label}],
+           levels:{same,three,two} (단계별 후보 수), excluded_holdings:n}
+
+    · 동일 코드 → 같은 3자리 → 같은 2자리 순으로 채우고, 모자라면 다음 단계로 넓힌다.
+    · 지주회사(64992)는 일반 기업 피어에서 제외하고, 지주회사는 지주회사끼리(같은 코드·649까지)만 비교한다.
+    · 같은 단계 안에서는 (1) 시드의 업종군이 같은 회사 → (2) 시드의 표본 순서(order)를 따른다.
+      업종군을 먼저 보는 이유: 64992(지주회사)에는 금융지주와 일반 지주가 섞여 있어서,
+      금융지주를 분석할 때 일반 지주(LG 등)가 먼저 끌려 들어오면 비교가 무의미해지기 때문이다.
+      시드에 없던 회사(실시간 조회)는 맨 뒤로 둔다.
+    """
+    code = str(target_code or "").strip()
+    result = {"code": code, "peers": [], "levels": {"same": 0, "three": 0, "two": 0},
+              "excluded_holdings": 0}
+    if not code:
+        return result
+
+    exclude = {str(item or "").strip() for item in exclude_codes}
+    holding_target = code == INDUSTRY_HOLDING_CODE
+    buckets = {"same": [], "three": [], "two": []}
+
+    for record in records:
+        corp_code = str((record or {}).get("corp_code") or "").strip()
+        peer_code = str((record or {}).get("induty_code") or "").strip()
+        if not corp_code or not peer_code or corp_code in exclude:
+            continue
+        if holding_target:
+            if not peer_code.startswith(INDUSTRY_HOLDING_CODE):
+                continue
+        elif peer_code.startswith(INDUSTRY_HOLDING_CODE):
+            result["excluded_holdings"] += 1
+            continue
+        match = peer_match(code, peer_code)
+        if holding_target and match == "two":
+            continue                      # 지주회사를 '금융업(64)' 전체로 넓히지는 않는다
+        if match:
+            buckets[match].append(record)
+
+    def order_of(record):
+        try:
+            index = int(record.get("order"))
+        except (TypeError, ValueError):
+            index = 10 ** 6
+        same_sector = bool(target_sector) and record.get("sector") == target_sector
+        return (0 if same_sector else 1, index, str(record.get("corp_name") or ""))
+
+    for level in ("same", "three", "two"):
+        rows = sorted(buckets[level], key=order_of)
+        result["levels"][level] = len(rows)
+        for record in rows:
+            if len(result["peers"]) >= max_peers:
+                break
+            result["peers"].append({
+                "corp_code": record.get("corp_code"),
+                "corp_name": record.get("corp_name") or "",
+                "name": display_name(record.get("corp_name")),
+                "stock_code": record.get("stock_code") or "",
+                "induty_code": record.get("induty_code"),
+                "match": level,
+                "match_label": PEER_MATCH_LABEL[level],
+            })
+    return result
+
+
+def metric_values(entry):
+    """한 연도의 dict(accounts·ratios·ccc) → 비교 지표 5개만 뽑는다(없으면 None)."""
+    ratios = (entry or {}).get("ratios") or {}
+    ccc = (entry or {}).get("ccc") or {}
+    return {
+        "op_margin": ratios.get("op_margin"),
+        "roe": ratios.get("roe"),
+        "debt_ratio": ratios.get("debt_ratio"),
+        "current_ratio": ratios.get("current_ratio"),
+        "ccc": ccc.get("ccc"),
+    }
+
+
+def peer_metrics(api_key, corp_code, year):
+    """
+    피어 1개사의 그 해 핵심 지표(영업이익률·ROE·부채비율·유동비율·CCC).
+
+    주요계정 + 전체 재무제표(CCC 입력값)를 함께 받는다. 실패하면 None → 그 피어만 표에서 빠진다.
+    """
+    key = (str(corp_code or ""), int(year))
+    if key in _PEER_METRICS_CACHE:
+        return _PEER_METRICS_CACHE[key]
+
+    metrics = None
+    accounts = None
+    fs_nm = None
+    try:
+        fs_div, fs_nm, rcept_no, accounts = fetch_statement(api_key, corp_code, year)
+        accounts.update(fetch_extra_accounts(api_key, corp_code, year,
+                                             fs_div=fs_div, known_accounts=accounts))
+    except (DartError, RuntimeError, urllib.error.URLError, OSError):
+        accounts = None
+
+    if accounts:
+        years_data = {year: {"accounts": accounts, "rcept_no": rcept_no, "fs_div": fs_div}}
+        compute_ratios(years_data, [year])
+        compute_working_capital(years_data, [year])
+        metrics = metric_values(years_data[year])
+        metrics["fs_nm"] = fs_nm
+    _PEER_METRICS_CACHE[key] = metrics
+    return metrics
+
+
+def compare_peers(target_values, peers, metric_specs=PEER_METRICS):
+    """
+    대상 기업과 피어를 지표별로 견준다.
+
+    · 피어 평균·중앙값은 그 지표가 있는 피어만으로 계산한다(금융업처럼 유동비율·CCC가 없는 경우).
+    · 순위는 '피어를 포함한 전체'에서 매기고, 동률은 같은 순위로 둔다.
+    """
+    target_values = target_values or {}
+    rows = []
+    for key, label, unit, higher_is_better, digits in metric_specs:
+        values = [peer["metrics"][key] for peer in peers
+                  if (peer.get("metrics") or {}).get(key) is not None]
+        target = target_values.get(key)
+        mean = (sum(values) / len(values)) if values else None
+        median = statistics.median(values) if values else None
+        gap = (target - mean) if (target is not None and mean is not None) else None
+        rank = None
+        if target is not None and values:
+            better = sum(1 for value in values
+                         if (value > target if higher_is_better else value < target))
+            rank = better + 1
+        rows.append({
+            "key": key, "label": label, "unit": unit, "digits": digits,
+            "higher_is_better": higher_is_better,
+            "target": target, "mean": mean, "median": median, "gap": gap,
+            "peer_values": values,
+            "rank": rank,
+            "total": (len(values) + 1) if target is not None else None,
+        })
+    return rows
+
+
+def format_peer_value(value, unit="%", digits=1):
+    """지표 값 표시: %는 '12.3%', 일은 '92일', 없으면 '-'."""
+    return fmt(value, digits, "%" if unit == "%" else unit)
+
+
+def format_peer_gap(value, unit="%", digits=1, signed=True):
+    """피어 평균과의 차이: %는 %p, 일은 일. signed=False면 부호를 붙이지 않는다(문장용)."""
+    if value is None:
+        return "-"
+    suffix = "%p" if unit == "%" else unit
+    if signed:
+        return fmt_diff(value, digits, suffix)
+    return fmt(abs(value), digits, suffix)
+
+
+def make_industry_comment(rows, target_name, peer_count, year, measure="median"):
+    """
+    동종업계 비교 요약 1~2문장 — 가장 두드러진 강점과 약점만 짚는다.
+
+    기준값은 중앙값을 쓴다. 피어가 2~3개사뿐이라 한 곳(SK하이닉스 같은 대형사·적자사)의
+    이상치가 평균을 통째로 끌고 가기 때문이다. (표에는 평균과 중앙값을 함께 보여 준다)
+    """
+    use_median = measure == "median"
+    usable = []
+    for index, row in enumerate(rows):
+        base = row["median"] if use_median else row["mean"]
+        if base is None:
+            base = row["mean"]
+        if row["target"] is None or row["rank"] is None or base is None:
+            continue
+        usable.append((index, row, base, row["target"] - base))
+    if not usable:
+        return ("%d년 %s의 지표와 견줄 수 있는 피어 값이 없어 상대 위치를 계산하지 못했습니다."
+                % (year, target_name))
+
+    best_index, best, best_base, best_gap = min(
+        usable, key=lambda item: (item[1]["rank"], -abs(item[3]), item[0]))
+    worst_index, worst, worst_base, worst_gap = max(
+        usable, key=lambda item: (item[1]["rank"], abs(item[3]), -item[0]))
+    measure_word = "중앙값" if use_median else "평균"
+
+    def clause(row, base, gap):
+        label = with_josa(row["label"], "은", "는")
+        if abs(gap) < (10 ** (-row["digits"]) / 2):
+            return "%s %s로 피어 %d개사 %s %s와 거의 같습니다" % (
+                label, format_peer_value(row["target"], row["unit"], row["digits"]),
+                peer_count, measure_word, format_peer_value(base, row["unit"], row["digits"]))
+        direction = "높습니다" if gap > 0 else "낮습니다"
+        return "%s %s로 피어 %d개사 %s %s보다 %s %s" % (
+            label, format_peer_value(row["target"], row["unit"], row["digits"]),
+            peer_count, measure_word, format_peer_value(base, row["unit"], row["digits"]),
+            format_peer_gap(abs(gap), row["unit"], row["digits"], signed=False), direction)
+
+    text = "%d년 %s의 %s. 피어를 포함한 %d개사 가운데 %d위입니다." % (
+        year, target_name, clause(best, best_base, best_gap), best["total"], best["rank"])
+    if worst_index != best_index:
+        text += " 반면 %s(%d위)." % (clause(worst, worst_base, worst_gap), worst["rank"])
+    return text
+
+
+def build_industry_comparison(api_key, analysis, max_peers=PEER_MAX, verbose=False):
+    """
+    단일 기업 분석 결과에 '동종업계 비교'를 붙인다. (분석 결과를 고치지 않고 새 dict를 돌려준다)
+
+    status
+      ok       : 비교 완료 (rows·comment·peers 채움)
+      no_code  : 업종 코드를 시드에서도 company.json 에서도 못 찾음
+      no_peers : 같은 업종 피어가 시드 표본에 없음
+      no_data  : 피어는 찾았지만 그 해 재무제표를 하나도 못 받음
+      error    : 예상 못 한 오류 (본 분석은 그대로 유지)
+
+    어느 경우에도 예외를 밖으로 내보내지 않는다 — 동종업계 비교는 참고 정보이고,
+    이 호출 하나 때문에 기업 분석 전체가 멈추면 안 되기 때문이다.
+    """
+    companies = (analysis or {}).get("companies") or []
+    years = (analysis or {}).get("years") or []
+    target = companies[0] if companies else None
+    year = years[-1] if years else None
+    name = display_name((target or {}).get("name"))
+    try:
+        if not target or not year or year not in (target.get("years") or {}):
+            return {"status": "no_code", "name": name, "year": year,
+                    "reason": "분석 결과가 없습니다."}
+
+        code, record, source = industry_code_for(api_key, target)
+        if not code:
+            return {"status": "no_code", "name": name, "year": year,
+                    "reason": "업종코드를 찾지 못했습니다."}
+
+        records = list(industry_seed().values())
+        known_codes = {str(item.get("corp_code")) for item in records}
+        if record and str(record.get("corp_code")) not in known_codes:
+            records.append(record)
+
+        selection = select_industry_peers(
+            code, records,
+            exclude_codes=[company.get("corp_code") for company in companies],
+            max_peers=max_peers,
+            target_sector=(record or {}).get("sector") or "",
+        )
+        base = {
+            "name": name, "year": year, "induty_code": code,
+            "industry_name": (record or {}).get("industry_name") or "",
+            "sector": (record or {}).get("sector") or "",
+            "code_source": source, "levels": selection["levels"],
+            "excluded_holdings": selection["excluded_holdings"],
+        }
+        if not selection["peers"]:
+            base.update({"status": "no_peers", "reason": "같은 업종 피어가 표본에 없습니다."})
+            return base
+
+        collected, skipped = [], []
+        for peer in selection["peers"]:
+            metrics = peer_metrics(api_key, peer["corp_code"], year)
+            if metrics is None:
+                skipped.append(peer["name"])
+                continue
+            peer["metrics"] = metrics
+            collected.append(peer)
+        if not collected:
+            base.update({"status": "no_data", "peers": selection["peers"], "skipped": skipped,
+                         "reason": "피어 재무제표를 받지 못했습니다."})
+            return base
+
+        target_values = metric_values(target["years"][year])
+        rows = compare_peers(target_values, collected)
+        base.update({
+            "status": "ok",
+            "peers": collected,
+            "skipped": skipped,
+            "target_values": target_values,
+            "rows": rows,
+            "comment": make_industry_comment(rows, name, len(collected), year),
+            "fs_nm": collected[0]["metrics"].get("fs_nm") or "",
+        })
+        return base
+    except Exception as error:      # 동종업계 비교는 참고 정보 — 본 분석을 깨지 않는다
+        if verbose:
+            print("  · 동종업계 비교를 건너뜁니다: %s" % error)
+        return {"status": "error", "name": name, "year": year, "reason": str(error)}
+
+
+# ---------------------------------------------------------------------------
 # 5. 콘솔 출력 (한글 폭을 고려한 정렬)
 # ---------------------------------------------------------------------------
 
@@ -1906,6 +2352,34 @@ def print_console_report(analysis):
                 else:
                     print("  [공시 위험] 최근 1년 공시 목록을 조회하지 못했습니다 — %s" % disclosure["error"])
                     print("             (비재무 정보라 재무 분석은 그대로 진행했습니다)")
+
+    # ---- 동종업계 자동 비교 (단일 기업) ----
+    peer_block = analysis.get("industry_peers") or {}
+    if peer_block.get("status") == "ok":
+        print()
+        print("=" * 84)
+        print(pad("  %d년 동종업계 비교 — 업종코드 %s" % (peer_block["year"], peer_block["induty_code"]), 84, "center"))
+        print("=" * 84)
+        header = pad("기업", 24)
+        for _key, label, unit, _better, _digits in PEER_METRICS:
+            header += pad(label + ("(%s)" % unit), 12, "right")
+        print(header)
+
+        def peer_line(label, values, width=12):
+            line = pad(label, 24)
+            for _key, _label, unit, _better, digits in PEER_METRICS:
+                line += pad(format_peer_value(values.get(_key), unit, digits), width, "right")
+            return line
+
+        average = {row["key"]: row["mean"] for row in peer_block["rows"]}
+        print(peer_line(peer_block["name"], peer_block["target_values"]))
+        print(peer_line("피어 평균 (%d개사)" % len(peer_block["peers"]), average))
+        for peer in peer_block["peers"]:
+            print(peer_line("  %s · %s" % (peer["name"], peer["match_label"]), peer["metrics"]))
+        if peer_block.get("skipped"):
+            print("  · 지표를 받지 못해 뺐습니다: %s" % ", ".join(peer_block["skipped"]))
+        print("  → " + peer_block["comment"])
+        print("  · 피어는 DART 기업개황의 업종코드(신고값)로 자동 선정했습니다. 실제 사업 구성과 다를 수 있습니다.")
 
     # ---- 두 회사 비교 요약 (최근 연도) ----
     if len(companies) == 2:
@@ -3233,6 +3707,14 @@ def build_analysis(api_key, corps, years, verbose=True):
     # 두 기업의 ROE 격차 요인 분해 · CCC 비교
     analysis["dupont_gap"] = build_dupont_gap(companies, years[-1])
     analysis["ccc_gap"] = build_ccc_gap(companies, years[-1])
+    # 동종업계 자동 비교 — 한 기업만 골랐을 때만. (두 기업 비교는 사용자가 고른 경쟁사가 이미 있다)
+    # 실패해도 build_industry_comparison 이 status만 낮춰 돌려주므로 본 분석은 그대로다.
+    if len(companies) == 1:
+        analysis["industry_peers"] = build_industry_comparison(api_key, analysis, verbose=verbose)
+        if verbose and analysis["industry_peers"].get("status") == "ok":
+            print("  · 동종업계: " + analysis["industry_peers"]["comment"])
+    else:
+        analysis["industry_peers"] = None
     return analysis
 
 

@@ -15,7 +15,7 @@ app.py(사이드바 버전)는 기록·비교용으로 그대로 두고, 화면�
          · 맨 아래 가득 찬 🔎 분석 실행 버튼
     ③ 분석 실행 시 결과 영역 상단(#analysis-result)으로 부드러운 스크롤
        (버튼을 눌렀을 때만 — 단순 입력 변경으로는 화면이 튀지 않게 session_state 플래그로 제어)
-    ④ 결과 — 종합 점수·공시 위험·한계 고지 + 3개 탭(핵심 재무·추이 / FP&A DuPont·CCC / 리스크·DART 원문)
+    ④ 결과 — 종합 점수·공시 위험·한계 고지 + 3개 탭(핵심 재무·추이 / FP&A DuPont·CCC + 동종업계 비교 / 리스크·DART 원문)
 
 사이드바는 쓰지 않는다. set_page_config(initial_sidebar_state="collapsed") +
 CSS로 사이드바 토글·여백을 없애고, 최대 너비를 가운데 정렬한다.
@@ -608,6 +608,19 @@ APP_CSS = """
   }
   .fs-fintable a.fs-year:hover { color: #4F46E5; border-bottom-color: #4F46E5; }
   .fs-fintable .fs-na { color: #9CA3AF; }
+
+  /* ── 동종업계 비교 표 ──────────────────────────────────── */
+  .fs-fintable .fs-peer-tag {
+      margin-left: 6px; font-size: 11px; font-weight: 500; color: #9CA3AF;
+  }
+  .fs-fintable tr.fs-peer-target th, .fs-fintable tr.fs-peer-target td {
+      background: #F5F3FF; color: #312E81; font-weight: 800;
+  }
+  .fs-fintable tr.fs-peer-target th { color: #312E81; }
+  .fs-fintable tr.fs-peer-base th, .fs-fintable tr.fs-peer-base td {
+      background: #FAFAFF; color: #4338CA; font-weight: 600;
+  }
+  .fs-fintable tr.fs-peer-base th { color: #4338CA; font-weight: 700; }
   footer, #MainMenu { visibility: hidden; }
 
   @media (max-width: 640px) {
@@ -1169,6 +1182,50 @@ def table_ccc(companies, years):
     st.caption("기말잔액 · 365일 기준 · 금융업 등은 비어 있을 수 있습니다")
 
 
+def peer_metric_cells(values):
+    """지표 하나하나를 표 셀 문자열로. 값이 없으면 흐린 '–'."""
+    cells = []
+    for key, _label, unit, _better, digits in fs.PEER_METRICS:
+        text = fs.format_peer_value((values or {}).get(key), unit, digits)
+        if text == "-":
+            cells.append('<td><span class="fs-na">-</span></td>')
+        else:
+            cells.append("<td>%s</td>" % html_lib.escape(text))
+    return "".join(cells)
+
+
+def industry_peer_table(peer_block):
+    """
+    동종업계 비교 표 — 행: 대상 · 피어 평균 · 피어 중앙값 · 개별 피어 / 열: 5개 지표.
+
+    피어가 2~3개사뿐이라 한 곳의 이상치가 평균을 끌고 간다. 그래서 중앙값을 함께 둔다.
+    """
+    head = ['<tr><th class="fs-rowhead">기업 (%d년)</th>' % peer_block["year"]]
+    for _key, label, unit, _better, _digits in fs.PEER_METRICS:
+        head.append("<th>%s%s</th>" % (html_lib.escape(label), "" if unit == "%" else " <span class=\"fs-peer-tag\">%s</span>" % html_lib.escape(unit)))
+    head.append("</tr>")
+
+    count = len(peer_block["peers"])
+    body = []
+    body.append('<tr class="fs-peer-target"><th scope="row">%s<span class="fs-peer-tag">대상</span></th>%s</tr>'
+                % (html_lib.escape(peer_block["name"]), peer_metric_cells(peer_block["target_values"])))
+
+    average = {row["key"]: row["mean"] for row in peer_block["rows"]}
+    median = {row["key"]: row["median"] for row in peer_block["rows"]}
+    body.append('<tr class="fs-peer-base"><th scope="row">피어 평균<span class="fs-peer-tag">%d개사</span></th>%s</tr>'
+                % (count, peer_metric_cells(average)))
+    body.append('<tr class="fs-peer-base"><th scope="row">피어 중앙값<span class="fs-peer-tag">%d개사</span></th>%s</tr>'
+                % (count, peer_metric_cells(median)))
+
+    for peer in peer_block["peers"]:
+        body.append('<tr><th scope="row">%s<span class="fs-peer-tag">%s</span></th>%s</tr>'
+                    % (html_lib.escape(peer["name"]), html_lib.escape(peer["match_label"]),
+                       peer_metric_cells(peer.get("metrics"))))
+
+    return ('<table class="fs-fintable fs-peertable"><thead>' + "".join(head)
+            + "</thead><tbody>" + "".join(body) + "</tbody></table>")
+
+
 def table_risk(company):
     rows = []
     for item in company["risk"]["items"]:
@@ -1544,10 +1601,63 @@ def render_ccc_block(analysis):
         quote_box("<b>%s</b> · %s" % (company["name"], company["ccc_comment"]))
 
 
+def industry_basis(peer_block):
+    """'업종코드 264 · 반도체·전자 · 동일 코드 1개사 + 같은 2자리 2개사 · 2025년 연결' 같은 한 줄."""
+    parts = ["업종코드 %s" % peer_block["induty_code"]]
+    label = peer_block.get("sector") or peer_block.get("industry_name")
+    if label:
+        parts.append(label)
+    counts = {}
+    for peer in peer_block["peers"]:
+        counts[peer["match_label"]] = counts.get(peer["match_label"], 0) + 1
+    if counts:
+        parts.append("피어 " + " + ".join("%s %d개사" % (match, count) for match, count in counts.items()))
+    basis = "연결" if "연결" in (peer_block.get("fs_nm") or "") else "재무제표"
+    parts.append("%d년 %s" % (peer_block["year"], basis))
+    return " · ".join(parts)
+
+
+def render_industry_block(analysis):
+    """동종업계 비교 — 한 기업만 분석했을 때만 표를 그린다(직접 고른 경쟁사와 섞이지 않게)."""
+    companies = analysis.get("companies") or []
+    peer_block = analysis.get("industry_peers") or {}
+
+    if len(companies) > 1:
+        section_title("동종업계 비교")
+        st.caption("동종업계 자동 비교는 기업 한 곳만 골랐을 때 표시됩니다. "
+                   "지금은 직접 고른 %d개사 비교입니다." % len(companies))
+        return
+
+    if peer_block.get("status") != "ok":
+        section_title("동종업계 비교")
+        reason = {
+            "no_code": "업종코드를 찾지 못해",
+            "no_peers": "같은 업종 피어를 찾지 못해",
+            "no_data": "피어 재무제표를 받지 못해",
+            "error": "업종 정보를 확인하지 못해",
+        }.get(peer_block.get("status"), "업종 정보를 확인하지 못해")
+        st.caption("%s 동종업계 비교를 건너뛰었습니다. 다른 지표와 분석은 그대로입니다." % reason)
+        return
+
+    section_title("동종업계 비교", industry_basis(peer_block))
+    quote_box(html_lib.escape(peer_block["comment"]))
+    st.markdown(industry_peer_table(peer_block), unsafe_allow_html=True)
+
+    notes = ["영업이익률·ROE·부채비율·유동비율은 %, CCC는 일",
+             "피어 평균·중앙값은 값이 있는 피어만으로 계산"]
+    if peer_block.get("skipped"):
+        notes.append("지표를 받지 못해 뺀 피어: %s" % ", ".join(peer_block["skipped"]))
+    st.caption(" · ".join(notes) + ".")
+    st.caption("업종코드는 DART 기업개황의 신고값(KSIC 10차 기준)이라 실제 사업 구성과 다를 수 있습니다. "
+               "피어 선정은 동일 코드 → 같은 3자리 → 같은 2자리 순이고, 지주회사(64992)는 지주회사끼리만 비교합니다.")
+
+
 def render_tab2(analysis):
     render_dupont_block(analysis)
     st.divider()
     render_ccc_block(analysis)
+    st.divider()
+    render_industry_block(analysis)
 
 
 # ---------------------------------------------------------------------------

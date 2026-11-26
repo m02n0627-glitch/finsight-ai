@@ -1,0 +1,1070 @@
+{
+  "saved_at": "2026-11-26T19:39:56",
+  "source": "OpenDART company.json 의 induty_code (KSIC 10차 코드표로 업종명 부여) — 주요 상장사 118개사. API 키·재무수치는 담지 않은 최소 시드.",
+  "sample_definition": "KOSPI·KOSDAQ 주요 상장사 118개사(16개 업종군) — 종목코드로 지정",
+  "count": 118,
+  "companies": [
+    {
+      "corp_code": "00126380",
+      "corp_name": "삼성전자(주)",
+      "stock_code": "005930",
+      "induty_code": "264",
+      "industry_name": "통신 및 방송장비 제조업",
+      "sector": "반도체·전자",
+      "order": 1
+    },
+    {
+      "corp_code": "00164779",
+      "corp_name": "에스케이하이닉스(주)",
+      "stock_code": "000660",
+      "induty_code": "2612",
+      "industry_name": "다이오드, 트랜지스터 및 유사 반도체 소자 제조업",
+      "sector": "반도체·전자",
+      "order": 2
+    },
+    {
+      "corp_code": "00401731",
+      "corp_name": "LG전자(주)",
+      "stock_code": "066570",
+      "induty_code": "264",
+      "industry_name": "통신 및 방송장비 제조업",
+      "sector": "반도체·전자",
+      "order": 3
+    },
+    {
+      "corp_code": "00126371",
+      "corp_name": "삼성전기(주)",
+      "stock_code": "009150",
+      "induty_code": "2622",
+      "industry_name": "인쇄회로기판 및 전자부품 실장기판 제조업",
+      "sector": "반도체·전자",
+      "order": 4
+    },
+    {
+      "corp_code": "00105961",
+      "corp_name": "엘지이노텍(주)",
+      "stock_code": "011070",
+      "induty_code": "262",
+      "industry_name": "전자 부품 제조업",
+      "sector": "반도체·전자",
+      "order": 5
+    },
+    {
+      "corp_code": "00160843",
+      "corp_name": "주식회사 DB하이텍",
+      "stock_code": "000990",
+      "induty_code": "2611",
+      "industry_name": "전자집적회로 제조업",
+      "sector": "반도체·전자",
+      "order": 6
+    },
+    {
+      "corp_code": "00161383",
+      "corp_name": "한미반도체(주)",
+      "stock_code": "042700",
+      "induty_code": "29271",
+      "industry_name": "반도체 제조용 기계 제조업",
+      "sector": "반도체·전자",
+      "order": 7
+    },
+    {
+      "corp_code": "00246417",
+      "corp_name": "(주)이오테크닉스",
+      "stock_code": "039030",
+      "induty_code": "29271",
+      "industry_name": "반도체 제조용 기계 제조업",
+      "sector": "반도체·전자",
+      "order": 8
+    },
+    {
+      "corp_code": "01135941",
+      "corp_name": "(주)원익아이피에스",
+      "stock_code": "240810",
+      "induty_code": "292",
+      "industry_name": "특수 목적용 기계 제조업",
+      "sector": "반도체·전자",
+      "order": 9
+    },
+    {
+      "corp_code": "00369657",
+      "corp_name": "리노공업(주)",
+      "stock_code": "058470",
+      "induty_code": "2629",
+      "industry_name": "기타 전자 부품 제조업",
+      "sector": "반도체·전자",
+      "order": 10
+    },
+    {
+      "corp_code": "00164742",
+      "corp_name": "현대자동차(주)",
+      "stock_code": "005380",
+      "induty_code": "30121",
+      "industry_name": "승용차 및 기타 여객용 자동차 제조업",
+      "sector": "자동차·부품",
+      "order": 11
+    },
+    {
+      "corp_code": "00106641",
+      "corp_name": "기아(주)",
+      "stock_code": "000270",
+      "induty_code": "30121",
+      "industry_name": "승용차 및 기타 여객용 자동차 제조업",
+      "sector": "자동차·부품",
+      "order": 12
+    },
+    {
+      "corp_code": "00164788",
+      "corp_name": "현대모비스(주)",
+      "stock_code": "012330",
+      "induty_code": "303",
+      "industry_name": "자동차 신품 부품 제조업",
+      "sector": "자동차·부품",
+      "order": 13
+    },
+    {
+      "corp_code": "00161125",
+      "corp_name": "한온시스템(주)",
+      "stock_code": "018880",
+      "induty_code": "29172",
+      "industry_name": "공기 조화장치 제조업",
+      "sector": "자동차·부품",
+      "order": 14
+    },
+    {
+      "corp_code": "01042775",
+      "corp_name": "에이치엘만도(주)",
+      "stock_code": "204320",
+      "induty_code": "303",
+      "industry_name": "자동차 신품 부품 제조업",
+      "sector": "자동차·부품",
+      "order": 15
+    },
+    {
+      "corp_code": "00481454",
+      "corp_name": "금호타이어(주)",
+      "stock_code": "073240",
+      "induty_code": "221",
+      "industry_name": "고무제품 제조업",
+      "sector": "자동차·부품",
+      "order": 16
+    },
+    {
+      "corp_code": "00937324",
+      "corp_name": "한국타이어앤테크놀로지(주)",
+      "stock_code": "161390",
+      "induty_code": "221",
+      "industry_name": "고무제품 제조업",
+      "sector": "자동차·부품",
+      "order": 17
+    },
+    {
+      "corp_code": "00106623",
+      "corp_name": "현대위아(주)",
+      "stock_code": "011210",
+      "induty_code": "303",
+      "industry_name": "자동차 신품 부품 제조업",
+      "sector": "자동차·부품",
+      "order": 18
+    },
+    {
+      "corp_code": "00356361",
+      "corp_name": "(주)LG화학",
+      "stock_code": "051910",
+      "induty_code": "20111",
+      "industry_name": "석유화학계 기초 화학 물질 제조업",
+      "sector": "화학·에너지",
+      "order": 19
+    },
+    {
+      "corp_code": "00165413",
+      "corp_name": "롯데케미칼(주)",
+      "stock_code": "011170",
+      "induty_code": "20111",
+      "industry_name": "석유화학계 기초 화학 물질 제조업",
+      "sector": "화학·에너지",
+      "order": 20
+    },
+    {
+      "corp_code": "00162461",
+      "corp_name": "한화솔루션(주)",
+      "stock_code": "009830",
+      "induty_code": "20111",
+      "industry_name": "석유화학계 기초 화학 물질 제조업",
+      "sector": "화학·에너지",
+      "order": 21
+    },
+    {
+      "corp_code": "00106368",
+      "corp_name": "금호석유화학(주)",
+      "stock_code": "011780",
+      "induty_code": "201",
+      "industry_name": "기초 화학물질 제조업",
+      "sector": "화학·에너지",
+      "order": 22
+    },
+    {
+      "corp_code": "00631518",
+      "corp_name": "SK이노베이션(주)",
+      "stock_code": "096770",
+      "induty_code": "192",
+      "industry_name": "석유 정제품 제조업",
+      "sector": "화학·에너지",
+      "order": 23
+    },
+    {
+      "corp_code": "00138279",
+      "corp_name": "S-Oil(주)",
+      "stock_code": "010950",
+      "induty_code": "19210",
+      "industry_name": "원유 정제처리업",
+      "sector": "화학·에너지",
+      "order": 24
+    },
+    {
+      "corp_code": "00261285",
+      "corp_name": "한국가스공사(주)",
+      "stock_code": "036460",
+      "induty_code": "35200",
+      "industry_name": "연료용 가스 제조 및 배관공급업",
+      "sector": "화학·에너지",
+      "order": 25
+    },
+    {
+      "corp_code": "00159193",
+      "corp_name": "한국전력공사(주)",
+      "stock_code": "015760",
+      "induty_code": "35120",
+      "industry_name": "송전 및 배전업",
+      "sector": "화학·에너지",
+      "order": 26
+    },
+    {
+      "corp_code": "00144164",
+      "corp_name": "SK가스(주)",
+      "stock_code": "018670",
+      "induty_code": "46713",
+      "industry_name": "기체 연료 및 관련제품 도매업",
+      "sector": "화학·에너지",
+      "order": 27
+    },
+    {
+      "corp_code": "00159218",
+      "corp_name": "한전KPS(주)",
+      "stock_code": "051600",
+      "induty_code": "42311",
+      "industry_name": "일반 전기 공사업",
+      "sector": "화학·에너지",
+      "order": 28
+    },
+    {
+      "corp_code": "00155319",
+      "corp_name": "포스코홀딩스(주)",
+      "stock_code": "005490",
+      "induty_code": "2411",
+      "industry_name": "제철, 제강 및 합금철 제조업",
+      "sector": "철강·소재",
+      "order": 29
+    },
+    {
+      "corp_code": "00145880",
+      "corp_name": "현대제철(주)",
+      "stock_code": "004020",
+      "induty_code": "2411",
+      "industry_name": "제철, 제강 및 합금철 제조업",
+      "sector": "철강·소재",
+      "order": 30
+    },
+    {
+      "corp_code": "00102858",
+      "corp_name": "고려아연(주)",
+      "stock_code": "010130",
+      "induty_code": "24213",
+      "industry_name": "연 및 아연 제련, 정련 및 합금 제조업",
+      "sector": "철강·소재",
+      "order": 31
+    },
+    {
+      "corp_code": "00684714",
+      "corp_name": "(주)풍산",
+      "stock_code": "103140",
+      "induty_code": "242",
+      "industry_name": "1차 비철금속 제조업",
+      "sector": "철강·소재",
+      "order": 32
+    },
+    {
+      "corp_code": "00157681",
+      "corp_name": "롯데정밀화학(주)",
+      "stock_code": "004000",
+      "induty_code": "20119",
+      "industry_name": "석탄화학계 화합물 및 기타 기초 유기화학 물질 제조업",
+      "sector": "철강·소재",
+      "order": 33
+    },
+    {
+      "corp_code": "01316254",
+      "corp_name": "에이치에스효성첨단소재(주)",
+      "stock_code": "298050",
+      "induty_code": "205",
+      "industry_name": "화학섬유 제조업",
+      "sector": "철강·소재",
+      "order": 34
+    },
+    {
+      "corp_code": "01515323",
+      "corp_name": "(주)엘지에너지솔루션",
+      "stock_code": "373220",
+      "induty_code": "28202",
+      "industry_name": "축전지 제조업",
+      "sector": "배터리·소재",
+      "order": 35
+    },
+    {
+      "corp_code": "00126362",
+      "corp_name": "삼성SDI(주)",
+      "stock_code": "006400",
+      "induty_code": "28202",
+      "industry_name": "축전지 제조업",
+      "sector": "배터리·소재",
+      "order": 36
+    },
+    {
+      "corp_code": "00155276",
+      "corp_name": "(주)포스코퓨처엠",
+      "stock_code": "003670",
+      "induty_code": "282",
+      "industry_name": "일차전지 및 축전지 제조업",
+      "sector": "배터리·소재",
+      "order": 37
+    },
+    {
+      "corp_code": "00120021",
+      "corp_name": "(주)LG",
+      "stock_code": "003550",
+      "induty_code": "64992",
+      "industry_name": "지주회사",
+      "sector": "지주",
+      "order": 38
+    },
+    {
+      "corp_code": "00164478",
+      "corp_name": "현대건설(주)",
+      "stock_code": "000720",
+      "induty_code": "41221",
+      "industry_name": "도로 건설업",
+      "sector": "건설",
+      "order": 39
+    },
+    {
+      "corp_code": "00124540",
+      "corp_name": "(주)대우건설",
+      "stock_code": "047040",
+      "induty_code": "41112",
+      "industry_name": "아파트 건설업",
+      "sector": "건설",
+      "order": 40
+    },
+    {
+      "corp_code": "00120030",
+      "corp_name": "지에스건설(주)",
+      "stock_code": "006360",
+      "induty_code": "4111",
+      "industry_name": "주거용 건물 건설업",
+      "sector": "건설",
+      "order": 41
+    },
+    {
+      "corp_code": "01524093",
+      "corp_name": "디엘이앤씨 주식회사",
+      "stock_code": "375500",
+      "induty_code": "412",
+      "industry_name": "토목 건설업",
+      "sector": "건설",
+      "order": 42
+    },
+    {
+      "corp_code": "00149655",
+      "corp_name": "삼성물산(주)",
+      "stock_code": "028260",
+      "induty_code": "467",
+      "industry_name": "기타 전문 도매업",
+      "sector": "건설",
+      "order": 43
+    },
+    {
+      "corp_code": "00153861",
+      "corp_name": "(주)태영건설",
+      "stock_code": "009410",
+      "induty_code": "41221",
+      "industry_name": "도로 건설업",
+      "sector": "건설",
+      "order": 44
+    },
+    {
+      "corp_code": "00102432",
+      "corp_name": "계룡건설산업(주)",
+      "stock_code": "013580",
+      "induty_code": "412",
+      "industry_name": "토목 건설업",
+      "sector": "건설",
+      "order": 45
+    },
+    {
+      "corp_code": "00162063",
+      "corp_name": "한신공영(주)",
+      "stock_code": "004960",
+      "induty_code": "41112",
+      "industry_name": "아파트 건설업",
+      "sector": "건설",
+      "order": 46
+    },
+    {
+      "corp_code": "00872984",
+      "corp_name": "(주)이마트",
+      "stock_code": "139480",
+      "induty_code": "471",
+      "industry_name": "종합 소매업",
+      "sector": "유통·식품",
+      "order": 47
+    },
+    {
+      "corp_code": "00120526",
+      "corp_name": "롯데쇼핑(주)",
+      "stock_code": "023530",
+      "induty_code": "47111",
+      "industry_name": "백화점",
+      "sector": "유통·식품",
+      "order": 48
+    },
+    {
+      "corp_code": "00136378",
+      "corp_name": "(주)신세계",
+      "stock_code": "004170",
+      "induty_code": "47111",
+      "industry_name": "백화점",
+      "sector": "유통·식품",
+      "order": 49
+    },
+    {
+      "corp_code": "00635134",
+      "corp_name": "CJ제일제당(주)",
+      "stock_code": "097950",
+      "induty_code": "108",
+      "industry_name": "동물용 사료 및 조제식품 제조업",
+      "sector": "유통·식품",
+      "order": 50
+    },
+    {
+      "corp_code": "00121941",
+      "corp_name": "대상(주)",
+      "stock_code": "001680",
+      "induty_code": "108",
+      "industry_name": "동물용 사료 및 조제식품 제조업",
+      "sector": "유통·식품",
+      "order": 51
+    },
+    {
+      "corp_code": "00141529",
+      "corp_name": "(주)오뚜기",
+      "stock_code": "007310",
+      "induty_code": "108",
+      "industry_name": "동물용 사료 및 조제식품 제조업",
+      "sector": "유통·식품",
+      "order": 52
+    },
+    {
+      "corp_code": "00108241",
+      "corp_name": "(주)농심",
+      "stock_code": "004370",
+      "induty_code": "108",
+      "industry_name": "동물용 사료 및 조제식품 제조업",
+      "sector": "유통·식품",
+      "order": 53
+    },
+    {
+      "corp_code": "00124726",
+      "corp_name": "(주)빙그레",
+      "stock_code": "005180",
+      "induty_code": "104",
+      "industry_name": "동물성 및 식물성 유지 제조업",
+      "sector": "유통·식품",
+      "order": 54
+    },
+    {
+      "corp_code": "00150244",
+      "corp_name": "하이트진로(주)",
+      "stock_code": "000080",
+      "induty_code": "11122",
+      "industry_name": "소주 제조업",
+      "sector": "유통·식품",
+      "order": 55
+    },
+    {
+      "corp_code": "01258507",
+      "corp_name": "롯데웰푸드(주)",
+      "stock_code": "280360",
+      "induty_code": "108",
+      "industry_name": "동물용 사료 및 조제식품 제조업",
+      "sector": "유통·식품",
+      "order": 56
+    },
+    {
+      "corp_code": "01263022",
+      "corp_name": "(주)비지에프리테일",
+      "stock_code": "282330",
+      "induty_code": "47122",
+      "industry_name": "체인화 편의점",
+      "sector": "유통·식품",
+      "order": 57
+    },
+    {
+      "corp_code": "00140177",
+      "corp_name": "(주)지에스리테일",
+      "stock_code": "007070",
+      "induty_code": "47122",
+      "industry_name": "체인화 편의점",
+      "sector": "유통·식품",
+      "order": 58
+    },
+    {
+      "corp_code": "00145109",
+      "corp_name": "(주)유한양행",
+      "stock_code": "000100",
+      "induty_code": "212",
+      "industry_name": "의약품 제조업",
+      "sector": "제약·바이오",
+      "order": 59
+    },
+    {
+      "corp_code": "00129679",
+      "corp_name": "(주)녹십자",
+      "stock_code": "006280",
+      "induty_code": "212",
+      "industry_name": "의약품 제조업",
+      "sector": "제약·바이오",
+      "order": 60
+    },
+    {
+      "corp_code": "00828497",
+      "corp_name": "한미약품(주)",
+      "stock_code": "128940",
+      "induty_code": "21212",
+      "industry_name": "완제 의약품 제조업",
+      "sector": "제약·바이오",
+      "order": 61
+    },
+    {
+      "corp_code": "00427483",
+      "corp_name": "(주)대웅제약",
+      "stock_code": "069620",
+      "induty_code": "212",
+      "industry_name": "의약품 제조업",
+      "sector": "제약·바이오",
+      "order": 62
+    },
+    {
+      "corp_code": "00992871",
+      "corp_name": "(주)종근당",
+      "stock_code": "185750",
+      "induty_code": "212",
+      "industry_name": "의약품 제조업",
+      "sector": "제약·바이오",
+      "order": 63
+    },
+    {
+      "corp_code": "00413046",
+      "corp_name": "(주)셀트리온",
+      "stock_code": "068270",
+      "induty_code": "21100",
+      "industry_name": "기초 의약 물질 및 생물학적 제제 제조업",
+      "sector": "제약·바이오",
+      "order": 64
+    },
+    {
+      "corp_code": "00877059",
+      "corp_name": "삼성바이오로직스(주)",
+      "stock_code": "207940",
+      "induty_code": "211",
+      "industry_name": "기초 의약 물질 및 생물학적 제제 제조업",
+      "sector": "제약·바이오",
+      "order": 65
+    },
+    {
+      "corp_code": "00878696",
+      "corp_name": "에스케이바이오팜 주식회사",
+      "stock_code": "326030",
+      "induty_code": "7011",
+      "industry_name": "자연과학 연구개발업",
+      "sector": "제약·바이오",
+      "order": 66
+    },
+    {
+      "corp_code": "00989619",
+      "corp_name": "(주)알테오젠",
+      "stock_code": "196170",
+      "induty_code": "70113",
+      "industry_name": "의학 및 약학 연구개발업",
+      "sector": "제약·바이오",
+      "order": 67
+    },
+    {
+      "corp_code": "00199252",
+      "corp_name": "에이치엘비(주)",
+      "stock_code": "028300",
+      "induty_code": "213",
+      "industry_name": "의료용품 및 기타 의약 관련제품 제조업",
+      "sector": "제약·바이오",
+      "order": 68
+    },
+    {
+      "corp_code": "00688996",
+      "corp_name": "(주)KB금융지주",
+      "stock_code": "105560",
+      "induty_code": "64992",
+      "industry_name": "지주회사",
+      "sector": "금융",
+      "order": 69
+    },
+    {
+      "corp_code": "00382199",
+      "corp_name": "(주)신한금융지주회사",
+      "stock_code": "055550",
+      "induty_code": "64992",
+      "industry_name": "지주회사",
+      "sector": "금융",
+      "order": 70
+    },
+    {
+      "corp_code": "00547583",
+      "corp_name": "(주)하나금융지주",
+      "stock_code": "086790",
+      "induty_code": "64992",
+      "industry_name": "지주회사",
+      "sector": "금융",
+      "order": 71
+    },
+    {
+      "corp_code": "01350869",
+      "corp_name": "(주)우리금융지주",
+      "stock_code": "316140",
+      "induty_code": "64992",
+      "industry_name": "지주회사",
+      "sector": "금융",
+      "order": 72
+    },
+    {
+      "corp_code": "00149646",
+      "corp_name": "중소기업은행",
+      "stock_code": "024110",
+      "induty_code": "64121",
+      "industry_name": "국내은행",
+      "sector": "금융",
+      "order": 73
+    },
+    {
+      "corp_code": "00126256",
+      "corp_name": "삼성생명보험(주)",
+      "stock_code": "032830",
+      "induty_code": "65110",
+      "industry_name": "생명보험업",
+      "sector": "금융",
+      "order": 74
+    },
+    {
+      "corp_code": "00139214",
+      "corp_name": "삼성화재해상보험(주)",
+      "stock_code": "000810",
+      "induty_code": "65121",
+      "industry_name": "손해보험업",
+      "sector": "금융",
+      "order": 75
+    },
+    {
+      "corp_code": "00159102",
+      "corp_name": "DB손해보험(주)",
+      "stock_code": "005830",
+      "induty_code": "65121",
+      "industry_name": "손해보험업",
+      "sector": "금융",
+      "order": 76
+    },
+    {
+      "corp_code": "00164973",
+      "corp_name": "현대해상화재보험(주)",
+      "stock_code": "001450",
+      "induty_code": "65121",
+      "industry_name": "손해보험업",
+      "sector": "금융",
+      "order": 77
+    },
+    {
+      "corp_code": "01133217",
+      "corp_name": "주식회사 카카오뱅크",
+      "stock_code": "323410",
+      "induty_code": "64121",
+      "industry_name": "국내은행",
+      "sector": "금융",
+      "order": 78
+    },
+    {
+      "corp_code": "00111722",
+      "corp_name": "미래에셋증권(주)",
+      "stock_code": "006800",
+      "induty_code": "66121",
+      "industry_name": "증권 중개업",
+      "sector": "금융",
+      "order": 79
+    },
+    {
+      "corp_code": "00432102",
+      "corp_name": "한국투자금융지주(주)",
+      "stock_code": "071050",
+      "induty_code": "64992",
+      "industry_name": "지주회사",
+      "sector": "금융",
+      "order": 80
+    },
+    {
+      "corp_code": "00266961",
+      "corp_name": "네이버(주)",
+      "stock_code": "035420",
+      "induty_code": "63120",
+      "industry_name": "포털 및 기타 인터넷 정보 매개 서비스업",
+      "sector": "IT·게임",
+      "order": 81
+    },
+    {
+      "corp_code": "00258801",
+      "corp_name": "(주)카카오",
+      "stock_code": "035720",
+      "induty_code": "63120",
+      "industry_name": "포털 및 기타 인터넷 정보 매개 서비스업",
+      "sector": "IT·게임",
+      "order": 82
+    },
+    {
+      "corp_code": "00261443",
+      "corp_name": "(주)엔씨",
+      "stock_code": "036570",
+      "induty_code": "582",
+      "industry_name": "소프트웨어 개발 및 공급업",
+      "sector": "IT·게임",
+      "order": 83
+    },
+    {
+      "corp_code": "00628860",
+      "corp_name": "(주)네오위즈",
+      "stock_code": "095660",
+      "induty_code": "5821",
+      "industry_name": "게임 소프트웨어 개발 및 공급업",
+      "sector": "IT·게임",
+      "order": 84
+    },
+    {
+      "corp_code": "00760971",
+      "corp_name": "주식회사 크래프톤",
+      "stock_code": "259960",
+      "induty_code": "5821",
+      "industry_name": "게임 소프트웨어 개발 및 공급업",
+      "sector": "IT·게임",
+      "order": 85
+    },
+    {
+      "corp_code": "00172291",
+      "corp_name": "(주)더존비즈온",
+      "stock_code": "012510",
+      "induty_code": "62022",
+      "industry_name": "컴퓨터시설 관리업",
+      "sector": "IT·게임",
+      "order": 86
+    },
+    {
+      "corp_code": "00126186",
+      "corp_name": "삼성에스디에스(주)",
+      "stock_code": "018260",
+      "induty_code": "62021",
+      "industry_name": "컴퓨터 시스템 통합 자문 및 구축 서비스업",
+      "sector": "IT·게임",
+      "order": 87
+    },
+    {
+      "corp_code": "00139834",
+      "corp_name": "(주)엘지씨엔에스",
+      "stock_code": "064400",
+      "induty_code": "62021",
+      "industry_name": "컴퓨터 시스템 통합 자문 및 구축 서비스업",
+      "sector": "IT·게임",
+      "order": 88
+    },
+    {
+      "corp_code": "00983271",
+      "corp_name": "엔에이치엔(주)",
+      "stock_code": "181710",
+      "induty_code": "5821",
+      "industry_name": "게임 소프트웨어 개발 및 공급업",
+      "sector": "IT·게임",
+      "order": 89
+    },
+    {
+      "corp_code": "00476498",
+      "corp_name": "(주)컴투스",
+      "stock_code": "078340",
+      "induty_code": "5821",
+      "industry_name": "게임 소프트웨어 개발 및 공급업",
+      "sector": "IT·게임",
+      "order": 90
+    },
+    {
+      "corp_code": "00159023",
+      "corp_name": "SK텔레콤(주)",
+      "stock_code": "017670",
+      "induty_code": "61220",
+      "industry_name": "무선 및 위성 통신업",
+      "sector": "통신",
+      "order": 91
+    },
+    {
+      "corp_code": "00190321",
+      "corp_name": "(주)케이티",
+      "stock_code": "030200",
+      "induty_code": "612",
+      "industry_name": "전기 통신업",
+      "sector": "통신",
+      "order": 92
+    },
+    {
+      "corp_code": "00231363",
+      "corp_name": "(주)LG유플러스",
+      "stock_code": "032640",
+      "induty_code": "61220",
+      "industry_name": "무선 및 위성 통신업",
+      "sector": "통신",
+      "order": 93
+    },
+    {
+      "corp_code": "00164645",
+      "corp_name": "에이치엠엠(주) ",
+      "stock_code": "011200",
+      "induty_code": "50112",
+      "industry_name": "외항 화물 운송업",
+      "sector": "운송·물류",
+      "order": 94
+    },
+    {
+      "corp_code": "00113526",
+      "corp_name": "(주)대한항공",
+      "stock_code": "003490",
+      "induty_code": "511",
+      "industry_name": "항공 여객 운송업",
+      "sector": "운송·물류",
+      "order": 95
+    },
+    {
+      "corp_code": "00138792",
+      "corp_name": "아시아나항공(주)",
+      "stock_code": "020560",
+      "induty_code": "511",
+      "industry_name": "항공 여객 운송업",
+      "sector": "운송·물류",
+      "order": 96
+    },
+    {
+      "corp_code": "00113410",
+      "corp_name": "씨제이대한통운(주)",
+      "stock_code": "000120",
+      "induty_code": "493",
+      "industry_name": "도로 화물 운송업",
+      "sector": "운송·물류",
+      "order": 97
+    },
+    {
+      "corp_code": "00360595",
+      "corp_name": "현대글로비스(주)",
+      "stock_code": "086280",
+      "induty_code": "5299",
+      "industry_name": "그 외 기타 운송관련 서비스업",
+      "sector": "운송·물류",
+      "order": 98
+    },
+    {
+      "corp_code": "01390344",
+      "corp_name": "에이치디현대중공업(주)",
+      "stock_code": "329180",
+      "induty_code": "31113",
+      "industry_name": "기타 선박 건조업",
+      "sector": "조선·기계·방산",
+      "order": 99
+    },
+    {
+      "corp_code": "00126478",
+      "corp_name": "삼성중공업(주)",
+      "stock_code": "010140",
+      "induty_code": "3111",
+      "industry_name": "선박 및 수상 부유 구조물 건조업",
+      "sector": "조선·기계·방산",
+      "order": 100
+    },
+    {
+      "corp_code": "00164830",
+      "corp_name": "에이치디한국조선해양(주)",
+      "stock_code": "009540",
+      "induty_code": "64992",
+      "industry_name": "지주회사",
+      "sector": "조선·기계·방산",
+      "order": 101
+    },
+    {
+      "corp_code": "00159616",
+      "corp_name": "두산에너빌리티(주)",
+      "stock_code": "034020",
+      "induty_code": "29119",
+      "industry_name": "기타 기관 및 터빈 제조업",
+      "sector": "조선·기계·방산",
+      "order": 102
+    },
+    {
+      "corp_code": "00126566",
+      "corp_name": "한화에어로스페이스(주)",
+      "stock_code": "012450",
+      "induty_code": "31321",
+      "industry_name": "항공기용 엔진 제조업",
+      "sector": "조선·기계·방산",
+      "order": 103
+    },
+    {
+      "corp_code": "00302926",
+      "corp_name": "현대로템(주)",
+      "stock_code": "064350",
+      "induty_code": "31910",
+      "industry_name": "전투용 차량 제조업",
+      "sector": "조선·기계·방산",
+      "order": 104
+    },
+    {
+      "corp_code": "01204056",
+      "corp_name": "(주)하이브",
+      "stock_code": "352820",
+      "induty_code": "592",
+      "industry_name": "오디오물 출판 및 원판 녹음업",
+      "sector": "엔터·미디어",
+      "order": 105
+    },
+    {
+      "corp_code": "00258689",
+      "corp_name": "(주)제이와이피엔터테인먼트",
+      "stock_code": "035900",
+      "induty_code": "59201",
+      "industry_name": "음악 및 기타 오디오물 출판업",
+      "sector": "엔터·미디어",
+      "order": 106
+    },
+    {
+      "corp_code": "00260930",
+      "corp_name": "(주)에스엠엔터테인먼트",
+      "stock_code": "041510",
+      "induty_code": "59201",
+      "industry_name": "음악 및 기타 오디오물 출판업",
+      "sector": "엔터·미디어",
+      "order": 107
+    },
+    {
+      "corp_code": "00265324",
+      "corp_name": "(주)씨제이이엔엠",
+      "stock_code": "035760",
+      "induty_code": "602",
+      "industry_name": "텔레비전 방송업",
+      "sector": "엔터·미디어",
+      "order": 108
+    },
+    {
+      "corp_code": "01168684",
+      "corp_name": "스튜디오드래곤(주)",
+      "stock_code": "253450",
+      "induty_code": "59114",
+      "industry_name": "방송 프로그램 제작업",
+      "sector": "엔터·미디어",
+      "order": 109
+    },
+    {
+      "corp_code": "00160588",
+      "corp_name": "(주)한화",
+      "stock_code": "000880",
+      "induty_code": "20494",
+      "industry_name": "화약 및 불꽃제품 제조업",
+      "sector": "생활·기타",
+      "order": 110
+    },
+    {
+      "corp_code": "00105952",
+      "corp_name": "(주)LS",
+      "stock_code": "006260",
+      "induty_code": "64992",
+      "industry_name": "지주회사",
+      "sector": "생활·기타",
+      "order": 111
+    },
+    {
+      "corp_code": "00117188",
+      "corp_name": "(주)효성",
+      "stock_code": "004800",
+      "induty_code": "649",
+      "industry_name": "기타 금융업",
+      "sector": "생활·기타",
+      "order": 112
+    },
+    {
+      "corp_code": "00170558",
+      "corp_name": "코웨이(주)",
+      "stock_code": "021240",
+      "induty_code": "969",
+      "industry_name": "그 외 기타 개인 서비스업",
+      "sector": "생활·기타",
+      "order": 113
+    },
+    {
+      "corp_code": "00583424",
+      "corp_name": "(주)아모레퍼시픽",
+      "stock_code": "090430",
+      "induty_code": "20423",
+      "industry_name": "화장품 제조업",
+      "sector": "생활·기타",
+      "order": 114
+    },
+    {
+      "corp_code": "00356370",
+      "corp_name": "(주)LG생활건강",
+      "stock_code": "051900",
+      "induty_code": "20422",
+      "industry_name": "치약, 비누 및 기타 세제 제조업",
+      "sector": "생활·기타",
+      "order": 115
+    },
+    {
+      "corp_code": "00939331",
+      "corp_name": "한국콜마(주)",
+      "stock_code": "161890",
+      "induty_code": "20423",
+      "industry_name": "화장품 제조업",
+      "sector": "생활·기타",
+      "order": 116
+    },
+    {
+      "corp_code": "00165680",
+      "corp_name": "(주)호텔신라",
+      "stock_code": "008770",
+      "induty_code": "47859",
+      "industry_name": "그 외 기타 분류 안된 상품 전문 소매업",
+      "sector": "생활·기타",
+      "order": 117
+    },
+    {
+      "corp_code": "00255619",
+      "corp_name": "(주)강원랜드",
+      "stock_code": "035250",
+      "induty_code": "91249",
+      "industry_name": "기타 사행시설 관리 및 운영업",
+      "sector": "생활·기타",
+      "order": 118
+    }
+  ]
+}
