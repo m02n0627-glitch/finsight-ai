@@ -2786,3 +2786,47 @@ def test_fpa_baseline_flags_financial_company(monkeypatch):
     assert baseline["revenue"] is None
     result = fs.simulate_fpa_scenarios(company, years[-1])
     assert result["status"] == "no_revenue"             # 매출액이 없으면 시뮬레이션하지 않는다
+
+
+def test_collect_company_fetches_note_only_for_latest_year(monkeypatch):
+    """주석 조회는 FCF 시뮬레이터가 쓰는 최신 연도에만 한다(DART 요청 절약)."""
+    asked = []
+
+    def fake_fetch_statement(api_key, corp_code, year, fs_div_pref=("CFS", "OFS")):
+        return "CFS", "연결재무제표", "2026%08d" % year, {"revenue": {"amount": 1e9},
+                                                        "assets": {"amount": 1e10}}
+
+    monkeypatch.setattr(fs, "fetch_statement", fake_fetch_statement)
+    monkeypatch.setattr(fs, "fetch_statement_links", lambda *a, **k: {})
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+    monkeypatch.setattr(fs, "fetch_depreciation_note",
+                        lambda rcept_no, **k: asked.append(rcept_no))
+
+    fs.collect_company("KEY", {"corp_name": "테스트", "corp_code": "00000000",
+                               "stock_code": ""}, [2024, 2025], verbose=False)
+    assert asked == ["202600002025"]              # 2024년은 조회하지 않는다
+
+
+REAL_NOTE_TOC_NODES = fs.note_toc_nodes      # 자동 격리 fixture 가 바꾸기 전의 원래 함수
+
+
+def test_note_toc_nodes_stops_after_first_failure(monkeypatch):
+    """main.do 가 한 번 막히면 그 실행에서는 다른 접수번호도 시도하지 않는다(분석 지연 방지)."""
+    monkeypatch.setattr(fs, "note_toc_nodes", REAL_NOTE_TOC_NODES)
+    fs.NOTE_NODE_CACHE.clear()
+    fs.NOTE_BLOCKED["flag"] = False
+    calls = []
+
+    def boom(url, timeout=None, attempts=1):
+        calls.append(url)
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(fs, "_fetch_dart_html", boom)
+    try:
+        assert fs.note_toc_nodes("20260310002820") == []
+        assert fs.note_toc_nodes("20250311001085") == []      # 두 번
+        assert fs.note_toc_nodes("20240312000736") == []      # 세 번
+        assert len(calls) == 1                                  # 실제 요청은 한 번뿐
+        assert fs.NOTE_BLOCKED["flag"] is True
+    finally:
+        fs.NOTE_BLOCKED["flag"] = False

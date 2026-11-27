@@ -1116,10 +1116,11 @@ def statement_link_label(links, kind):
 #      어느 쪽이 당기 비용인지 확정할 수 없으므로 그 표는 버린다.
 #    · 네트워크·형식 오류는 예외 없이 None(미공시)으로 물러난다.
 
-NOTE_TOC_TIMEOUT = 20                # 주석 원문 조회 제한 시간(초)
+NOTE_TOC_TIMEOUT = 8                 # 주석 원문 조회 제한 시간(초) — 분석 전체를 붙잡지 않게 짧게
 NOTE_TOC_MAX_PER_GROUP = 2           # 한 종류(성격별·현금흐름표 등)에서 시도할 목차 수
 NOTE_NODE_CACHE = {}                 # rcept_no → [목차 노드] (한 실행 안에서 재사용)
 NOTE_DEPRECIATION_CACHE = {}         # rcept_no → 파싱 결과 dict | None
+NOTE_BLOCKED = {"flag": False}       # main.do 조회가 한 번 막히면 그 실행에서는 더 시도하지 않는다
 
 # 목차 이름으로 찾을 주석 종류 — 앞에 있을수록 우선(같은 종류 안에서는 '연결' 우선)
 NOTE_SOURCE_GROUPS = (
@@ -1352,17 +1353,23 @@ def depreciation_from_note_html(html):
 
 
 def note_toc_nodes(rcept_no, timeout=NOTE_TOC_TIMEOUT, use_cache=True):
-    """사업보고서 main.do 목차 노드(주석 포함). 실패하면 빈 목록."""
+    """사업보고서 main.do 목차 노드(주석 포함). 실패하면 빈 목록.
+
+    · 한 번 실패하면 이 실행에서는 더 시도하지 않는다(NOTE_BLOCKED).
+      해외 리전에서 main.do 가 막히는 날 분석 한 번에 수십 초를 쓰지 않게 하기 위함이다.
+    · 주석은 FCF 보조 자료일 뿐이라 실패해도 분석은 '미공시'로 그대로 진행된다.
+    """
     rcept_no = (rcept_no or "").strip()
-    if not rcept_no:
+    if not rcept_no or NOTE_BLOCKED["flag"]:
         return []
     if use_cache and rcept_no in NOTE_NODE_CACHE:
         return NOTE_NODE_CACHE[rcept_no]
     try:
-        html = _fetch_dart_html(DART_MAIN_DOC % rcept_no, timeout)
+        html = _fetch_dart_html(DART_MAIN_DOC % rcept_no, timeout, attempts=1)
         nodes = parse_toc_nodes(html)
     except Exception:
         nodes = []
+        NOTE_BLOCKED["flag"] = True        # 이후 접수번호는 건너뛴다
     NOTE_NODE_CACHE[rcept_no] = nodes
     return nodes
 
@@ -1408,7 +1415,7 @@ def fetch_depreciation_note(rcept_no, timeout=NOTE_TOC_TIMEOUT, use_cache=True):
         for group, node in _note_candidates(note_toc_nodes(rcept_no, timeout)):
             url = viewer_url(node)
             try:
-                html = _fetch_dart_html(url, timeout)
+                html = _fetch_dart_html(url, timeout, attempts=1)
             except Exception:
                 continue
             parsed = depreciation_from_note_html(html)
@@ -4888,8 +4895,10 @@ def collect_company(api_key, corp, years, verbose=True):
                                       fs_div=fs_div, known_accounts=accounts)
         accounts.update(extras)
         # DART API가 현금흐름표 '조정'의 감가상각비를 주지 않는 회사(삼성전자 등)는
-        # 사업보고서 주석 원문에서 직접 읽어 온다. 실패하면 '미공시'로 남긴다.
-        if not api_depreciation_available(accounts):
+        # 사업보고서 주석 원문에서 직접 읽어 온다. FCF 시뮬레이터가 쓰는 최신 연도만 조회한다
+        # (예전 연도는 화면에 쓰지 않으므로 DART 요청을 아끼고, 실패하면 '미공시'로 남긴다).
+        latest_year = max(years) if years else year
+        if year == latest_year and not api_depreciation_available(accounts):
             note = fetch_depreciation_note(rcept_no)
             if note and note_depreciation_plausible(note, accounts):
                 accounts["note_depreciation"] = note
