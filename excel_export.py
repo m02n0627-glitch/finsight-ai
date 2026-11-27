@@ -66,7 +66,7 @@ DASH_FONT = Font(size=10, color="9CA3AF")
 IMPAIRED_FONT = Font(size=10, bold=True, color="B91C1C")
 LINK_FONT = Font(size=10, color="4F46E5", underline="single")
 
-GRADE_LABEL = {"safe": "안전", "caution": "주의", "danger": "위험"}
+GRADE_LABEL = {"safe": "안전", "caution": "주의", "danger": "위험", "excluded": "판정 제외"}
 SEVERITY_LABEL = {"severe": "심각", "caution": "주의"}
 
 # 핵심 재무제표(2번 시트) — 화면의 CORE_ROWS 와 같은 순서
@@ -341,6 +341,14 @@ def _sheet_summary(wb, analysis):
 
         if risk.get("comment"):
             writer.note("한 줄 진단: " + str(risk["comment"]).replace("🟢 ", "").replace("🟡 ", "").replace("🔴 ", ""))
+
+        # 감가상각비 출처 1줄 — API 현금흐름표 / 주석 원문 파싱 / 미공시(보수 계산)
+        try:
+            baseline = fs.fpa_baseline(company, latest) if latest else None
+            if baseline:
+                writer.note(fs.depreciation_source_text(baseline))
+        except Exception:
+            pass
 
         writer.blank()
         writer.section("5대 재무 리스크 항목")

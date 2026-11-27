@@ -27,6 +27,19 @@ import analyzer as fs  # noqa: E402
 APP_V2 = os.path.join(ROOT, "app_v2.py")
 APP_V1 = os.path.join(ROOT, "app.py")
 
+
+@pytest.fixture(autouse=True)
+def _clear_streamlit_cache():
+    """st.cache_data 가 테스트 사이에 남아 앞 테스트의 분석 결과를 돌려주지 않게 매번 비운다.
+
+    앱의 run_analysis(1시간 캐시)는 인자가 같으면 캐시를 돌려주므로,
+    가짜 분석을 갈아 끼우는 테스트가 앞 테스트 결과를 받을 수 있다.
+    """
+    import streamlit as st
+    st.cache_data.clear()
+    yield
+    st.cache_data.clear()
+
 FAKE_KEY = "a" * 40
 # 앱의 추천 기업(POPULAR) 목록에 있는 이름을 쓴다 — 검색어 없이도 후보가 그려진다.
 CORP_LIST = [
@@ -399,10 +412,10 @@ def test_app_v2_renders_fpa_scenario_tab_without_exception(monkeypatch, patched_
 
     assert not at.exception
     assert [tab.label for tab in at.tabs] == [
-        "① 핵심 재무 & 추이",
-        "② FP&A 심층 · DuPont & CCC",
-        "③ 리스크 상세 & DART 원문",
-        "④ FP&A 시나리오",
+        "① 재무·추이",
+        "② FP&A·업계",
+        "③ 리스크·공시",
+        "④ 시나리오",
     ]
     assert [slider.label for slider in at.slider] == [
         "연간 매출 성장률 (%)", "판관비 중 고정비 비중 (%)",
@@ -675,3 +688,199 @@ def test_app_v2_tab4_scenario_glossary_is_collapsed(monkeypatch, patched_engine)
     body = "\n".join(str(m.value) for m in matched[0].markdown)
     for word in ("보수적 (Bear)", "기준 (Base)", "낙관적 (Bull)", "내 시나리오", "Y+1"):
         assert word in body
+
+
+# ---------------------------------------------------------------------------
+# 금융업(은행·보험·지주) 화면 — 제조업 지표 대신 금융업 지표 + 안내
+# ---------------------------------------------------------------------------
+
+FINANCE_SEED = {
+    "00688996": {"corp_code": "00688996", "corp_name": "(주)KB금융지주", "stock_code": "105560",
+                 "induty_code": "64992", "industry_name": "지주회사", "sector": "금융", "order": 1},
+    "00382199": {"corp_code": "00382199", "corp_name": "(주)신한금융지주회사", "stock_code": "055550",
+                 "induty_code": "64992", "industry_name": "지주회사", "sector": "금융", "order": 2},
+    "00547583": {"corp_code": "00547583", "corp_name": "(주)하나금융지주", "stock_code": "086790",
+                 "induty_code": "64992", "industry_name": "지주회사", "sector": "금융", "order": 3},
+}
+
+KB_BY_YEAR = {
+    2024: {"assets": 757_845_532_000_000, "liabilities": 698_030_351_000_000,
+           "equity": 59_815_181_000_000, "op_income": 8_045_261_000_000,
+           "net_income": 5_028_606_000_000, "interest_expense": 17_664_671_000_000,
+           "interest_income": 28_000_000_000_000, "net_interest_income": 12_500_000_000_000,
+           "op_cash_flow": 3_000_000_000_000, "retained_earnings": 34_808_220_000_000},
+    2025: {"assets": 797_923_033_000_000, "liabilities": 737_093_044_000_000,
+           "equity": 60_829_989_000_000, "op_income": 8_517_711_000_000,
+           "net_income": 5_840_715_000_000, "interest_expense": 16_083_007_000_000,
+           "interest_income": 29_156_100_000_000, "net_interest_income": 13_073_093_000_000,
+           "op_cash_flow": 4_200_000_000_000, "retained_earnings": 38_333_741_000_000},
+}
+
+
+def finance_company():
+    """KB금융 2025 구조 — 매출원가·유동자산·유동부채가 없는 금융지주 재무제표."""
+    years_data = {}
+    for year, values in KB_BY_YEAR.items():
+        years_data[year] = {
+            "accounts": {key: {"amount": value} for key, value in values.items()},
+            "rcept_no": "2026%08d" % year,
+            "fs_div": "CFS",
+            "statement_links": {"income": "", "balance": "", "cashflow": "", "main": "",
+                                "labels": {}, "fallback": False},
+        }
+    years = sorted(years_data)
+    fs.compute_ratios(years_data, years)
+    fs.compute_working_capital(years_data, years)
+    company = {
+        "name": "KB금융", "corp_code": "00688996", "stock_code": "105560",
+        "years": years_data, "fs_div": "CFS", "fs_nm": "연결재무제표",
+        "latest_rcept_no": years_data[years[-1]]["rcept_no"],
+        "statement_links": {y: years_data[y]["statement_links"] for y in years},
+        "disclosure": {"status": "clear", "matches": [], "scanned": 5, "total": 5,
+                       "pages": 1, "truncated": False, "oldest": "2025-01-01",
+                       "period": "2025-11-27 ~ 2026-11-27", "error": "", "corrections": 0},
+    }
+    company["risk"] = fs.evaluate_risk(company, years)
+    company["dupont_comment"] = fs.make_dupont_comment(company, years[-1])
+    company["ccc_comment"] = fs.make_ccc_comment(company, years)
+    return company
+
+
+def finance_industry_block(target):
+    """금융업 동종업계 블록 — 실제 엔진 함수로 만들어 화면 모양을 맞춘다."""
+    target_values = fs.metric_values(target["years"][2025])
+    peers = [
+        {"corp_code": "00382199", "corp_name": "(주)신한금융지주회사", "name": "신한금융지주회사",
+         "stock_code": "055550", "induty_code": "64992", "match": "same", "match_label": "동일 코드",
+         "metrics": {"op_margin": None, "net_margin": None, "roe": 9.1, "roa": 0.68,
+                     "debt_ratio": 1300.0, "current_ratio": None, "ccc": None,
+                     "fs_nm": "연결재무제표"}},
+        {"corp_code": "00547583", "corp_name": "(주)하나금융지주", "name": "하나금융지주",
+         "stock_code": "086790", "induty_code": "64992", "match": "same", "match_label": "동일 코드",
+         "metrics": {"op_margin": None, "net_margin": None, "roe": 8.4, "roa": 0.62,
+                     "debt_ratio": 1250.0, "current_ratio": None, "ccc": None,
+                     "fs_nm": "연결재무제표"}},
+    ]
+    specs = fs.PEER_METRICS_FINANCIAL
+    rows = fs.compare_peers(target_values, peers, specs)
+    financial = fs.financial_industry_info(accounts=target["years"][2025]["accounts"],
+                                           corp_code="00688996")
+    return {
+        "status": "ok", "name": "KB금융", "year": 2025, "induty_code": "64992",
+        "industry_name": "지주회사", "sector": "금융", "code_source": "seed",
+        "levels": {"same": 2, "three": 0, "two": 0}, "excluded_holdings": 0,
+        "fs_nm": "연결재무제표", "target_values": target_values, "rows": rows,
+        "peers": peers, "skipped": [], "metric_specs": [list(spec) for spec in specs],
+        "financial": financial,
+        "comment": fs.make_industry_comment(rows, "KB금융", len(peers), 2025),
+    }
+
+
+def finance_analysis():
+    company = finance_company()
+    return {"companies": [company], "years": [2024, 2025], "dupont_gap": None,
+            "ccc_gap": None, "industry_peers": finance_industry_block(company)}
+
+
+@pytest.fixture
+def finance_engine(monkeypatch):
+    monkeypatch.setattr(fs, "_INDUSTRY_SEED", FINANCE_SEED)
+    analysis = finance_analysis()
+    monkeypatch.setattr(fs, "sync_corp_codes",
+                        lambda *a, **k: list(CORP_LIST) + [
+                            {"corp_name": "KB금융", "corp_code": "00688996", "stock_code": "105560"}])
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    return analysis
+
+
+def test_app_v2_financial_company_shows_finance_kpis_and_exclusion(monkeypatch, finance_engine):
+    """KB금융 — ROE·ROA·이자손익 구조를 보여 주고 유동비율·부채비율은 '판정 제외'로 밝힌다."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = AppTest.from_file(APP_V2, default_timeout=60)
+    at.run()
+    assert not at.exception
+    at.text_input(key="fs2_main_query").set_value("KB")
+    at.run()
+    at.get_by_key("fs2_run").click()
+    at.run()
+
+    assert not at.exception
+    text = _texts(at)
+    assert "금융업(은행·보험·지주)은 일반 기업과 재무제표 구조가 달라" in text
+    assert "ROE" in text and "ROA" in text
+    assert "이자손익 구조" in text and "이자수익" in text
+    # 리스크 표에서 두 항목이 '판정 제외'로 표시된다
+    assert "판정 제외" in text
+    assert "금융업 구조로 판정 제외 2개" in text
+
+    risk_tables = [d.value for d in at.dataframe if "판정" in list(d.value.columns)]
+    assert risk_tables
+    states = " ".join(str(v) for v in risk_tables[0]["판정"])
+    assert "판정 제외" in states
+
+
+def test_app_v2_financial_company_peer_table_uses_finance_metrics(monkeypatch, finance_engine):
+    """동종업계 표가 유동비율·CCC 대신 ROA 등 금융업 지표로 그려진다."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = AppTest.from_file(APP_V2, default_timeout=60)
+    at.run()
+    at.text_input(key="fs2_main_query").set_value("KB")
+    at.run()
+    at.get_by_key("fs2_run").click()
+    at.run()
+
+    assert not at.exception
+    markdown = _markdown(at)
+    assert ">ROA<" in markdown and ">순이익률<" in markdown
+    assert ">CCC<" not in markdown                       # 금융업 비교에서 CCC 열은 없다
+    assert "표 지표는 금융업 기준" in _texts(at)
+
+
+def test_app_v2_financial_company_simulator_explains_missing_revenue(monkeypatch, finance_engine):
+    """금융지주는 매출액 한 줄이 없어 시나리오를 만들지 않고, 그 이유를 화면에 밝힌다."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = AppTest.from_file(APP_V2, default_timeout=60)
+    at.run()
+    at.text_input(key="fs2_main_query").set_value("KB")
+    at.run()
+    at.get_by_key("fs2_run").click()
+    at.run()
+
+    assert not at.exception
+    text = _texts(at)
+    assert "금융업 출발점" in text
+    assert "매출액 단일 계정이 없어" in text
+    assert "숫자를 임의로 만들지 않습니다" in text
+    assert not [s for s in at.slider]                    # 슬라이더를 그리지 않는다
+
+
+def test_app_v2_tab4_shows_depreciation_source_caption(monkeypatch):
+    """감가상각비 출처(주석 원문 파싱 반영)가 탭 ④에 1줄로 표시된다."""
+    analysis = build_analysis(impaired=False)
+    company = analysis["companies"][0]
+    note = {"amount": 46_926_592_000_000, "basis": "note_sum", "unit": "백만원",
+            "depreciation": 43_605_740_000_000, "amortization": 3_320_852_000_000,
+            "note_label": "21. 비용의 성격별 분류 (연결)", "note_url": "https://dart.fss.or.kr/x",
+            "source": "note"}
+    company["years"][2024]["accounts"]["note_depreciation"] = note
+
+    monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+
+    assert not at.exception
+    text = _texts(at)
+    assert "감가상각비 출처: 주석 원문 파싱 반영" in text
+    assert "21. 비용의 성격별 분류 (연결)" in text
+
+
+def test_app_v2_tab4_says_missing_when_no_note(monkeypatch):
+    """주석에서도 못 찾으면 '미공시'로 밝히고 EBITDA가 보수적임을 알린다."""
+    monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: build_analysis(impaired=False))
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+
+    assert not at.exception
+    assert "감가상각비 출처: 미공시" in _texts(at)

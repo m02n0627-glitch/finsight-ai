@@ -100,6 +100,7 @@ STATE_STYLE = {
     "safe": ("🟢", "안전", "#15803D", "#DCFCE7"),
     "caution": ("🟡", "주의", "#B45309", "#FEF3C7"),
     "danger": ("🔴", "위험", "#B91C1C", "#FEE2E2"),
+    "excluded": ("➖", "판정 제외", "#475569", "#F3F4F6"),
     "na": ("⚪", "N/A", "#475569", "#F3F4F6"),
 }
 
@@ -271,6 +272,75 @@ def metric_value(company, year, key):
     if key == "interest_coverage":
         return interest_coverage(company, year)
     return ratio_of(company, year, key)
+
+
+# ── 금융업(은행·보험·증권·지주) 분기 ─────────────────────────────────────────
+# 금융업은 매출원가·유동자산 구분이 없어 유동비율·CCC·매출총이익률이 성립하지 않는다.
+# 판단은 엔진(financial_industry_info — 업종코드 + 재무제표 구조)이 하고,
+# 화면은 그 결과에 따라 '제조업 지표' 대신 '금융업 지표'를 보여 준다.
+FINANCE_KPI_NOTE = ("금융업은 자본을 얼마나 효율적으로 썼는지(ROE·ROA)와 "
+                    "이자수익·이자비용 구조로 읽습니다.")
+
+
+def finance_info(company, year):
+    """금융업 여부 — 엔진 함수가 없는 옛 배포본에서는 False로 물러난다(화면을 깨지 않는다)."""
+    empty = {"is_financial": False, "label": "", "notice": "", "basis": ""}
+    try:
+        accounts = (company.get("years", {}).get(year) or {}).get("accounts") or {}
+        info = fs.financial_industry_info(accounts=accounts,
+                                          corp_code=company.get("corp_code"),
+                                          stock_code=company.get("stock_code"))
+        return info if isinstance(info, dict) else empty
+    except Exception:
+        return empty
+
+
+def finance_kpi_cards(company, latest):
+    """금융업 핵심 지표 5개 — ROE · ROA · 순이익 · 영업이익 · 이자손익 구조 (3 + 2 배치)."""
+    roe = ratio_of(company, latest, "roe")
+    roa = ratio_of(company, latest, "roa")
+    net_income = account_amount(company, latest, "net_income")
+    op_income = account_amount(company, latest, "op_income")
+    interest_income = account_amount(company, latest, "interest_income")
+    interest_expense = account_amount(company, latest, "interest_expense")
+    net_interest = account_amount(company, latest, "net_interest_income")
+
+    if net_interest is not None:
+        interest_value = human_won(net_interest)
+        if interest_income is not None and interest_expense is not None:
+            interest_note = "이자수익 %s − 이자비용 %s" % (human_won(interest_income),
+                                                       human_won(interest_expense))
+        else:
+            interest_note = "공시된 순이자손익"
+    elif interest_expense is not None:
+        interest_value = human_won(interest_expense)
+        interest_note = "이자비용 · 순이자손익 미공시"
+    else:
+        interest_value = "-"
+        interest_note = "이자 관련 계정 미공시"
+
+    roe_label = "ROE (자기자본이익률)" + (" · 적자" if (roe is not None and roe < 0) else "")
+    rows = [
+        [(roe_label, pct(roe), "당기순이익 ÷ 기말 자본총계", "#111827"),
+         ("ROA (총자산이익률)", pct(roa), "당기순이익 ÷ 기말 자산총계", "#4F46E5"),
+         ("%d년 순이익" % latest, human_won(net_income), "지배·비지배 합산 당기순이익", "#6B7280")],
+        [("%d년 영업이익" % latest, human_won(op_income),
+          "금융업은 이자·보험손익을 포함한 영업이익", "#6B7280"),
+         ("이자손익 구조", interest_value, interest_note, "#9CA3AF")],
+    ]
+    for row in rows:
+        columns = st.columns(len(row))
+        for column, (label, value, sub, accent) in zip(columns, row):
+            column.markdown(card(label, value, sub, accent), unsafe_allow_html=True)
+
+
+def finance_notice_caption(company, latest, prefix=""):
+    """금융업 안내 1줄 — 항목이 실제로 제외됐을 때만 붙인다."""
+    info = finance_info(company, latest)
+    if not info.get("is_financial"):
+        return ""
+    text = (prefix + info.get("notice", "") + " " + FINANCE_KPI_NOTE).strip()
+    return "%s (%s)" % (text, info.get("basis")) if info.get("basis") else text
 
 
 def status_tag(tone, text, basis=""):
@@ -848,9 +918,11 @@ APP_CSS = """
       }
       .fs-fintable th, .fs-fintable td { padding: 6px 8px; font-size: 12px; }
 
-      /* 탭 4개가 최대한 한 줄에 보이도록 간격만 줄인다(남는 탭은 탭바 스크롤) */
-      .stTabs [data-baseweb="tab"], .stTabs [role="tab"] { padding: 0 8px; font-size: 12px; height: 40px; }
-      .stTabs [data-baseweb="tab-list"], .stTabs [role="tablist"] { gap: 2px; overflow-x: auto; }
+      /* 탭 4개가 390px 폭에서도 한 줄에 들어오게 — 라벨을 짧게 줄인 데 맞춰 간격·글자를 조인다 */
+      .stTabs [data-baseweb="tab"], .stTabs [role="tab"] { padding: 0 7px; font-size: 11.5px; height: 40px; }
+      .stTabs [data-baseweb="tab"], .stTabs [role="tab"], .stTabs [role="tab"] p { letter-spacing: -0.02em; }
+      .stTabs [data-baseweb="tab-list"], .stTabs [role="tablist"] { gap: 0; overflow-x: auto; }
+      .stTabs [data-baseweb="tab"] p, .stTabs [role="tab"] p { margin: 0; }
   }
 </style>
 """
@@ -1227,14 +1299,27 @@ def render_summary(analysis):
         else:
             source = ""
 
+        # 금융업은 매출액·영업이익률 대신 ROE를 앞세운다(매출액 단일 계정이 없는 회사도 있다).
+        if finance_info(company, latest).get("is_financial"):
+            roe = ratio_of(company, latest, "roe")
+            prev_roe = ratio_of(company, years[-2], "roe") if len(years) >= 2 else None
+            roe_diff = (roe - prev_roe) if (roe is not None and prev_roe is not None) else None
+            margin_block = metric_block(
+                "ROE (자기자본이익률)", pct(roe),
+                "전년 대비 %s" % (num(roe_diff, 1, "%p") if roe_diff is not None else "-"),
+                cmp_html=peer_cmp_html(peer_position(peers.get("roe")), "fs-metric-cmp"))
+        else:
+            margin_block = metric_block(
+                "영업이익률", pct(op_margin),
+                "전년 대비 %s" % (num(margin_diff, 1, "%p") if margin_diff is not None else "-"),
+                tag=alert_tag("op_margin", company, latest), cmp_html=margin_cmp)
+
         grid = "".join([
             metric_block("%d년 리스크" % latest, "%d점" % risk["score"], risk_note,
                          grade_color if risky else ""),
             metric_block("%d년 매출액" % latest, human_won(revenue),
                          "전년 대비 %s" % (num(revenue_growth, 1, "%") if revenue_growth is not None else "-")),
-            metric_block("영업이익률", pct(op_margin),
-                         "전년 대비 %s" % (num(margin_diff, 1, "%p") if margin_diff is not None else "-"),
-                         tag=alert_tag("op_margin", company, latest), cmp_html=margin_cmp),
+            margin_block,
             metric_block("최근 1년 공시 위험", d_value, disclosure_note),
         ])
 
@@ -1248,6 +1333,10 @@ def render_summary(analysis):
                         source, grid),
             unsafe_allow_html=True,
         )
+        # 금융업은 구조가 달라 유동비율·CCC·매출총이익률을 판정하지 않는다는 사실을 카드 바로 아래 1줄로 밝힌다.
+        notice = finance_notice_caption(company, latest)
+        if notice:
+            st.caption(notice)
     st.write("")
 
 
@@ -1464,14 +1553,15 @@ def table_ccc(companies, years):
     st.caption("기말잔액 · 365일 기준 · 금융업 등은 비어 있을 수 있습니다")
 
 
-def peer_metric_cells(values, comparisons=None):
+def peer_metric_cells(values, comparisons=None, specs=None):
     """지표 하나하나를 표 셀 문자열로. 값이 없으면 흐린 '–'.
 
     comparisons: {지표키: peer_position()} — 대상 기업 행에만 '평균 대비 높음/낮음'을
     숫자 아래 작은 회색 글씨로 붙인다(값 자체보다 작고 묽게).
+    specs      : 비교 지표 목록 — 금융업은 유동비율·CCC 대신 ROE·ROA를 쓴다.
     """
     cells = []
-    for key, _label, unit, _better, digits in fs.PEER_METRICS:
+    for key, _label, unit, _better, digits in (specs or fs.PEER_METRICS):
         text = fs.format_peer_value((values or {}).get(key), unit, digits)
         if text == "-":
             inner = '<span class="fs-na">-</span>'
@@ -1482,14 +1572,24 @@ def peer_metric_cells(values, comparisons=None):
     return "".join(cells)
 
 
+def peer_specs(peer_block):
+    """동종업계 표의 지표 목록 — 결과에 기록된 스펙(금융업 포함)을 우선 쓴다."""
+    specs = peer_block.get("metric_specs") if isinstance(peer_block, dict) else None
+    if not specs:
+        return fs.PEER_METRICS
+    return [tuple(spec) for spec in specs]
+
+
 def industry_peer_table(peer_block):
     """
-    동종업계 비교 표 — 행: 대상 · 피어 평균 · 피어 중앙값 · 개별 피어 / 열: 5개 지표.
+    동종업계 비교 표 — 행: 대상 · 피어 평균 · 피어 중앙값 · 개별 피어 / 열: 비교 지표.
 
     피어가 2~3개사뿐이라 한 곳의 이상치가 평균을 끌고 간다. 그래서 중앙값을 함께 둔다.
+    금융업은 유동비율·CCC 대신 영업이익률·순이익률·ROE·ROA·부채비율로 비교한다.
     """
+    specs = peer_specs(peer_block)
     head = ['<tr><th class="fs-rowhead">기업 (%d년)</th>' % peer_block["year"]]
-    for _key, label, unit, _better, _digits in fs.PEER_METRICS:
+    for _key, label, unit, _better, _digits in specs:
         head.append("<th>%s%s</th>" % (html_lib.escape(label), "" if unit == "%" else " <span class=\"fs-peer-tag\">%s</span>" % html_lib.escape(unit)))
     head.append("</tr>")
 
@@ -1498,19 +1598,19 @@ def industry_peer_table(peer_block):
     positions = {row["key"]: peer_position(row) for row in peer_block["rows"]}
     body.append('<tr class="fs-peer-target"><th scope="row">%s<span class="fs-peer-tag">대상</span></th>%s</tr>'
                 % (html_lib.escape(peer_block["name"]),
-                   peer_metric_cells(peer_block["target_values"], positions)))
+                   peer_metric_cells(peer_block["target_values"], positions, specs)))
 
     average = {row["key"]: row["mean"] for row in peer_block["rows"]}
     median = {row["key"]: row["median"] for row in peer_block["rows"]}
     body.append('<tr class="fs-peer-base"><th scope="row">피어 평균<span class="fs-peer-tag">%d개사</span></th>%s</tr>'
-                % (count, peer_metric_cells(average)))
+                % (count, peer_metric_cells(average, None, specs)))
     body.append('<tr class="fs-peer-base"><th scope="row">피어 중앙값<span class="fs-peer-tag">%d개사</span></th>%s</tr>'
-                % (count, peer_metric_cells(median)))
+                % (count, peer_metric_cells(median, None, specs)))
 
     for peer in peer_block["peers"]:
         body.append('<tr><th scope="row">%s<span class="fs-peer-tag">%s</span></th>%s</tr>'
                     % (html_lib.escape(peer["name"]), html_lib.escape(peer["match_label"]),
-                       peer_metric_cells(peer.get("metrics"))))
+                       peer_metric_cells(peer.get("metrics"), None, specs)))
 
     return ('<table class="fs-fintable fs-peertable"><thead>' + "".join(head)
             + "</thead><tbody>" + "".join(body) + "</tbody></table>")
@@ -1820,6 +1920,16 @@ def render_metric_overview(analysis):
         return
     latest = years[-1]
     company = companies[0]
+
+    # 금융업은 유동비율·부채비율·매출총이익률 대신 ROE·ROA·이자손익 구조로 본다.
+    info = finance_info(company, latest)
+    if info.get("is_financial"):
+        section_title("주요 지표", "%d년 결산 기준 · 금융업 지표" % latest)
+        finance_kpi_cards(company, latest)
+        st.caption(finance_notice_caption(company, latest, "이 화면은 "))
+        st.write("")
+        return
+
     positions = {key: peer_position(row) for key, row in peer_rows(analysis).items()}
     try:
         impaired = bool(fs.capital_impaired_info(company, latest)["impaired"])
@@ -1890,6 +2000,14 @@ def render_dupont_block(analysis):
     section_title("DuPont ROE 3단계 분해",
                   "ROE = 순이익률 × 총자산회전율 × 재무레버리지 (기말 잔액 기준)")
 
+    if len(companies) == 1 and finance_info(companies[0], latest).get("is_financial"):
+        # 금융업 — 순이익률·총자산회전율은 매출액 단일 계정이 있을 때만 성립한다.
+        st.caption("금융업은 매출액 대신 이자수익·순이익 구조로 보므로 "
+                   "ROE·ROA를 직접 보여 줍니다. (매출액 단일 계정이 없는 금융지주는 순이익률·회전율을 계산하지 않습니다)")
+        finance_kpi_cards(companies[0], latest)
+        st.caption(finance_notice_caption(companies[0], latest, "DuPont 분해는 "))
+        return
+
     if len(companies) == 1:
         company = companies[0]
         dupont = company["years"][latest].get("dupont") or {}
@@ -1937,9 +2055,17 @@ def render_dupont_block(analysis):
 
 def render_ccc_block(analysis):
     companies, years = analysis["companies"], analysis["years"]
+    latest = years[-1]
 
     section_title("운전자본 · 현금전환주기(CCC)",
                   "DSO + DIO − DPO = CCC · 짧을수록 운전자본 부담이 작습니다")
+
+    if len(companies) == 1 and finance_info(companies[0], latest).get("is_financial"):
+        # 금융업은 '매입 → 재고 → 매출 회수' 주기가 없다 → CCC 계산 자체가 성립하지 않는다.
+        st.caption(finance_notice_caption(companies[0], latest,
+                                          "운전자본(CCC)은 매입·재고·매출 회수 주기라 "))
+        st.caption("대신 ROE·ROA(위 DuPont 영역)와 이자수익·이자비용 구조로 봅니다.")
+        return
     has_ccc = any(
         ((company["years"][year].get("ccc") or {}).get("ccc") is not None)
         for company in companies for year in years
@@ -2028,8 +2154,14 @@ def render_industry_block(analysis):
     quote_box(html_lib.escape(peer_block["comment"]))
     st.markdown(industry_peer_table(peer_block), unsafe_allow_html=True)
 
-    notes = ["영업이익률·ROE·부채비율·유동비율은 %, CCC는 일",
-             "피어 평균·중앙값은 값이 있는 피어만으로 계산"]
+    financial = (peer_block.get("financial") or {}).get("is_financial")
+    if financial:
+        notes = ["표 지표는 금융업 기준 — 영업이익률·순이익률·ROE·ROA·부채비율 (%)",
+                 "유동비율·CCC는 금융업에서 성립하지 않아 비교에서 빼고 ROE·ROA로 비교",
+                 "피어 중앙값·평균은 값이 있는 피어만으로 계산"]
+    else:
+        notes = ["영업이익률·ROE·부채비율·유동비율은 %, CCC는 일",
+                 "피어 평균·중앙값은 값이 있는 피어만으로 계산"]
     if peer_block.get("skipped"):
         notes.append("지표를 받지 못해 뺀 피어: %s" % ", ".join(peer_block["skipped"]))
     st.caption(" · ".join(notes) + ".")
@@ -2176,12 +2308,27 @@ def fpa_alert_cell(scenario):
 
 def render_fpa_simulator(company, latest):
     baseline = fs.fpa_baseline(company, latest)
+    finance = (baseline or {}).get("financial") or finance_info(company, latest)
     if not baseline or not baseline.get("revenue") or baseline["revenue"] <= 0:
+        if finance.get("is_financial"):
+            # 금융지주(IFRS17)는 은행·보험·증권 손익을 합친 '매출액' 한 줄을 공시하지 않는다.
+            # 없는 매출을 지어내 시뮬레이션하지 않고, 금융업에서 읽을 수 있는 숫자만 보여 준다.
+            section_title("금융업 출발점", "%d년 결산 — 매출액 단일 계정이 없어 표준 시나리오를 계산하지 않습니다" % latest)
+            finance_kpi_cards(company, latest)
+            st.caption(finance_notice_caption(company, latest, "이 시뮬레이터는 "))
+            st.caption("매출 성장률 가정을 쓸 수 없어 Y+1~Y+3 추정을 만들지 않았습니다"
+                       "(금융지주는 은행·보험·증권 손익을 합친 매출액 한 줄을 공시하지 않음). 숫자를 임의로 만들지 않습니다.")
+            return
         st.info("매출액이 공시되지 않았거나 0 이하라 시나리오를 계산할 수 없습니다. 다른 기업이나 연도를 선택해 보세요.")
         return
 
     # 출발점 — 최신 결산 연도의 3표 수치
     fpa_start_cards(baseline, latest)
+    # 감가상각비를 어디서 가져왔는지 1줄로 밝힌다(API / 주석 원문 파싱 / 미공시).
+    # 삼성전자처럼 API가 주지 않아 주석에서 읽은 경우 EBITDA·FCF가 이 값만큼 달라진다.
+    st.caption(fs.depreciation_source_text(baseline))
+    if finance.get("is_financial"):
+        st.caption(finance_notice_caption(company, latest, "시뮬레이터에서 "))
     st.write("")
 
     defaults = fs.fpa_default_assumptions(baseline)
@@ -2425,6 +2572,7 @@ def risk_compare_table(companies):
 
 def render_tab3(analysis):
     companies, years = analysis["companies"], analysis["years"]
+    latest = years[-1]
 
     section_title("5대 리스크 상세",
                   "항목당 20점 · 데이터 없는 항목은 분모에서 제외 · 85점 이상 안전 / 60점 이상 주의 / 60점 미만 위험")
@@ -2436,6 +2584,10 @@ def render_tab3(analysis):
             st.markdown("**%s · %d점 · %s**" % (company["name"], risk["score"], STATE_STYLE[risk["grade"]][1]))
         table_risk(company)
         quote_box(risk["comment"])
+        fin = risk.get("financial") or finance_info(company, latest)
+        if fin.get("is_financial"):
+            st.caption("금융업 판정 — 유동비율·부채비율은 구조가 달라 '판정 제외'로 빼고 점수는 나머지 항목으로만 환산했습니다. "
+                       "이자보상배율·Z''는 금융업에서도 계산되지만 제조업과 해석이 다릅니다. (%s)" % (fin.get("basis") or "금융업"))
         if risk.get("capital_impaired"):
             st.warning("%s — 부채비율·ROE·DuPont은 음수 자본으로 왜곡되어 계산하지 않습니다."
                        % (risk.get("capital_impaired_text") or "자본잠식 상태입니다"))
@@ -2529,10 +2681,10 @@ def render_results(analysis):
     st.write("")
 
     tab1, tab2, tab3, tab4 = st.tabs([
-        "① 핵심 재무 & 추이",
-        "② FP&A 심층 · DuPont & CCC",
-        "③ 리스크 상세 & DART 원문",
-        "④ FP&A 시나리오",
+        "① 재무·추이",
+        "② FP&A·업계",
+        "③ 리스크·공시",
+        "④ 시나리오",
     ])
     with tab1:
         render_tab1(analysis)

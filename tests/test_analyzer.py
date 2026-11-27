@@ -41,11 +41,18 @@ def _isolate_statement_links(monkeypatch):
 
     시드 조회를 검증하는 테스트는 이 안에서 시드를 직접 채운다.
     (실제 시드 파일 내용은 test_statement_links_seed_file_shipped 가 따로 확인한다)
+    주석 원문(DART main.do) 조회도 막아 두어, 테스트가 네트워크를 타지 않게 한다.
+    주석 파싱 테스트는 각자 note_toc_nodes / _fetch_dart_html 을 바꿔 끼운다.
     """
     monkeypatch.setattr(fs, "_STATEMENT_LINKS_SEED", {})
     fs._STATEMENT_LINKS_CACHE.clear()
+    fs.NOTE_NODE_CACHE.clear()
+    fs.NOTE_DEPRECIATION_CACHE.clear()
+    monkeypatch.setattr(fs, "note_toc_nodes", lambda *args, **kwargs: [])
     yield
     fs._STATEMENT_LINKS_CACHE.clear()
+    fs.NOTE_NODE_CACHE.clear()
+    fs.NOTE_DEPRECIATION_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -2408,3 +2415,374 @@ def test_simulate_fpa_scenarios_note_limits_and_insights() -> None:
     assert 2 <= len(result["insights"]) <= 3
     assert "영업레버리지" in result["insights"][0]        # 매출 대비 영업이익 민감도
     assert "FCF" in result["insights"][1]                 # 누적 FCF · 기말 현금
+
+
+# ---------------------------------------------------------------------------
+# 18. 주석 원문 감가상각비 파싱 — 단위 변환 · 당기 선택 · 모호한 표 배제
+# ---------------------------------------------------------------------------
+# DART fnlttSinglAcntAll 이 현금흐름표 '조정'의 감가상각비를 주지 않는 회사(삼성전자 등)는
+# 사업보고서 주석 원문(report/viewer.do)의 표를 읽는다.
+# 아래 표 구조는 실제 삼성전자 2025 사업보고서 '21. 비용의 성격별 분류 (연결)' 원문과 같다.
+
+def dart_note_html(rows, unit="백만원", period="당기", title="21. 비용의 성격별 분류 (연결)",
+                   extra_tables=""):
+    """DART 주석 원문과 같은 모양의 HTML — 머리표(당기·단위) + 본표(항목|금액)."""
+    unit_line = "(단위 : %s)" % unit if unit else ""
+    body = "".join(
+        "<TR height='30'><TD width='256'>%s</TD>"
+        "<TD width='191' align='RIGHT'>%s</TD></TR>" % (label, value)
+        for label, value in rows)
+    return (
+        "<HTML><BODY>"
+        "<P class='table-group-xbrl'><A name='toc1'>%s</A></P>"
+        "<TABLE class='nb'><TBODY>"
+        "<TR><TD colspan='2'>비용의 성격별 분류 공시</TD></TR>"
+        "<TR><TD>%s</TD><TD align='RIGHT'>%s</TD></TR>"
+        "</TBODY></TABLE>"
+        "%s"
+        "<TABLE border='1'><THEAD><TR><TH></TH><TH>공시금액</TH></TR></THEAD>"
+        "<TBODY>%s</TBODY></TABLE>"
+        "</BODY></HTML>" % (title, period, unit_line, extra_tables, body))
+
+
+@pytest.mark.parametrize("unit,factor", [("원", 1), ("천원", 10 ** 3),
+                                         ("백만원", 10 ** 6), ("억원", 10 ** 8)])
+def test_depreciation_note_normalizes_unit_to_won(unit, factor):
+    html = dart_note_html([("감가상각비", "43,000"), ("무형자산상각비", "3,000")],
+                          unit=unit)
+    parsed = fs.depreciation_from_note_html(html)
+
+    assert parsed["unit"] == unit
+    assert parsed["depreciation"] == 43000 * factor
+    assert parsed["amortization"] == 3000 * factor
+    assert parsed["amount"] == 46000 * factor          # 두 항목을 더한다
+    assert parsed["basis"] == "note_sum"
+
+
+def test_depreciation_note_prefers_combined_line_and_never_double_counts():
+    html = dart_note_html([("감가상각비 및 상각비", "90,000"), ("감가상각비", "60,000")])
+    parsed = fs.depreciation_from_note_html(html)
+
+    assert parsed["combined"] == 90e9
+    assert parsed["amount"] == 90e9                     # 합산 표기를 쓰고 항목은 더하지 않는다
+    assert parsed["basis"] == "note_combined"
+
+
+def test_depreciation_note_skips_prior_period_table():
+    """'전기' 표만 감가상각비가 있는 경우 당기 값을 지어내지 않는다."""
+    html = (
+        "<HTML><BODY>"
+        "<TABLE><TBODY><TR><TD>당기</TD><TD>(단위 : 백만원)</TD></TR></TBODY></TABLE>"
+        "<TABLE><TBODY><TR><TD>급여</TD><TD>37,000</TD></TR></TBODY></TABLE>"
+        "<TABLE><TBODY><TR><TD>전기</TD><TD>(단위 : 백만원)</TD></TR></TBODY></TABLE>"
+        "<TABLE><TBODY><TR><TD>감가상각비</TD><TD>39,000</TD></TR></TBODY></TABLE>"
+        "</BODY></HTML>")
+    # 두 번째 표 앞의 문맥이 '전기'이므로 그 표는 쓰지 않는다.
+    assert fs.depreciation_from_note_html(html) is None
+
+
+def test_depreciation_note_without_unit_is_rejected():
+    """단위 표기가 없으면 1,000배 오차를 피하기 위해 쓰지 않는다."""
+    html = dart_note_html([("감가상각비", "43,605,740")], unit=None)
+    assert fs.depreciation_from_note_html(html) is None
+
+
+def test_depreciation_note_rejects_amortization_only_table():
+    """무형자산상각비만 찾힌 표는 감가상각비를 빠뜨린 것이라 쓰지 않는다(과소 계상 방지)."""
+    html = dart_note_html([("무형자산상각비", "3,320,852")])
+    assert fs.depreciation_from_note_html(html) is None
+
+
+def test_depreciation_note_rejects_ambiguous_table():
+    """같은 표에 '감가상각비'가 두 번(취득원가·상각누계액) 나오면 어느 쪽이 비용인지 알 수 없다."""
+    html = dart_note_html([("감가상각비", "10,000"), ("감가상각비", "20,000")])
+    assert fs.depreciation_from_note_html(html) is None
+
+
+def test_depreciation_note_handles_parenthesized_negative():
+    html = dart_note_html([("감가상각비", "(2,000)")])
+    assert fs.depreciation_from_note_html(html)["amount"] == 2e9   # 절댓값 2,000백만원
+
+
+def test_depreciation_note_uses_dart_samsung_like_tables():
+    """삼성전자 2025 실제 값(감가상각비 43,605,740 · 무형자산상각비 3,320,852 백만원)."""
+    html = dart_note_html([("제품과 재공품의 감소(증가)", "126,727"),
+                           ("감가상각비", "43,605,740"),
+                           ("무형자산상각비", "3,320,852"),
+                           ("기타 비용", "61,591,905")])
+    parsed = fs.depreciation_from_note_html(html)
+    assert parsed["amount"] == 46_926_592_000_000        # 46.93조원
+    assert round(parsed["amount"] / 1e12, 2) == 46.93
+
+
+def _note_nodes():
+    return [
+        {"text": "2-5. 연결 현금흐름표", "rcpNo": "1", "dcmNo": "9", "eleId": "24",
+         "offset": "0", "length": "1", "dtd": "dart4.xsd"},
+        {"text": "21. 비용의 성격별 분류 (연결)", "rcpNo": "1", "dcmNo": "9", "eleId": "46",
+         "offset": "0", "length": "1", "dtd": "dart4.xsd"},
+    ]
+
+
+def test_fetch_depreciation_note_reads_toc_then_viewer(monkeypatch):
+    fs.NOTE_NODE_CACHE.clear()
+    fs.NOTE_DEPRECIATION_CACHE.clear()
+    seen = []
+    monkeypatch.setattr(fs, "note_toc_nodes", lambda rcept_no, timeout=None, use_cache=True: _note_nodes())
+    monkeypatch.setattr(fs, "_fetch_dart_html",
+                        lambda url, timeout=None, attempts=2: (seen.append(url),
+                                                               dart_note_html([("감가상각비", "43,605,740")]))[1])
+
+    note = fs.fetch_depreciation_note("20260310002820")
+    assert note["amount"] == 43_605_740e6
+    assert note["note_label"] == "21. 비용의 성격별 분류 (연결)"
+    assert note["note_group"] == "nature"
+    assert note["source"] == "note"
+    assert "eleId=46" in note["note_url"]
+    # 현금흐름표(한 장)는 주석 후보에서 빼고 '비용의 성격별 분류'만 조회했다
+    assert len(seen) == 1
+
+
+def test_fetch_depreciation_note_returns_none_on_network_failure(monkeypatch):
+    fs.NOTE_NODE_CACHE.clear()
+    fs.NOTE_DEPRECIATION_CACHE.clear()
+
+    def boom(*args, **kwargs):
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr(fs, "note_toc_nodes", boom)
+    assert fs.fetch_depreciation_note("20260310002820") is None
+    # 실패도 캐시해 같은 요청을 반복하지 않는다(분석 한 번에 수십 초를 쓰지 않게)
+    assert fs.NOTE_DEPRECIATION_CACHE["20260310002820"] is None
+
+
+def test_note_depreciation_plausible_uses_assets_upper_bound():
+    note = {"amount": 46.9e12}
+    assert fs.note_depreciation_plausible(note, {"assets": {"amount": 566e12}}) is True
+    assert fs.note_depreciation_plausible(note, {"assets": {"amount": 10e12}}) is False
+    assert fs.note_depreciation_plausible({"amount": None}, {}) is False
+
+
+def test_collect_company_attaches_note_depreciation_when_api_missing(monkeypatch):
+    """API에 감가상각비가 없으면 주석 파싱값을 붙이고, 연도 dict 에 출처를 남긴다."""
+    accounts = {"revenue": {"amount": 333.6e12}, "op_income": {"amount": 43.6e12},
+                "assets": {"amount": 566.9e12}, "cost_of_sales": {"amount": 202.2e12},
+                "sgna": {"amount": 87.8e12}}
+    note = {"amount": 46.93e12, "basis": "note_sum", "unit": "백만원",
+            "depreciation": 43.6e12, "amortization": 3.32e12, "combined": None,
+            "note_label": "21. 비용의 성격별 분류 (연결)", "note_url": "https://dart/",
+            "note_group": "nature", "rcept_no": "20260310002820", "source": "note"}
+
+    fs.NOTE_NODES = None
+    monkeypatch.setattr(fs, "fetch_statement",
+                        lambda *a, **k: ("CFS", "연결재무제표", "20260310002820", accounts))
+    monkeypatch.setattr(fs, "fetch_statement_links", lambda *a, **k: {})
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+    monkeypatch.setattr(fs, "fetch_depreciation_note", lambda rcept_no, **k: note)
+
+    company = fs.collect_company("KEY", {"corp_name": "삼성전자", "corp_code": "00126380",
+                                         "stock_code": "005930"}, [2025], verbose=False)
+    entry = company["years"][2025]
+    assert entry["accounts"]["note_depreciation"]["amount"] == 46.93e12
+    assert entry["depreciation_note"]["note_group"] == "nature"
+
+
+def test_collect_company_keeps_missing_when_note_implausible(monkeypatch):
+    """주석 값이 자산총계보다 크면(단위 오파싱 등) 붙이지 않고 미공시로 둔다."""
+    accounts = {"revenue": {"amount": 100e9}, "assets": {"amount": 200e9}}
+    note = {"amount": 9e15, "basis": "note_sum", "note_label": "x"}
+
+    monkeypatch.setattr(fs, "fetch_statement",
+                        lambda *a, **k: ("CFS", "연결재무제표", "2025", accounts))
+    monkeypatch.setattr(fs, "fetch_statement_links", lambda *a, **k: {})
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+    monkeypatch.setattr(fs, "fetch_depreciation_note", lambda rcept_no, **k: note)
+
+    company = fs.collect_company("KEY", {"corp_name": "테스트", "corp_code": "00000000",
+                                         "stock_code": ""}, [2025], verbose=False)
+    assert "note_depreciation" not in company["years"][2025]["accounts"]
+
+
+def test_fpa_depreciation_falls_back_to_note_and_reports_source():
+    note = {"amount": 46.93e12, "basis": "note_sum", "unit": "백만원",
+            "depreciation": 43.6e12, "amortization": 3.32e12,
+            "detail": [("depreciation", 43.6e12), ("amortization", 3.32e12)]}
+    api_accounts = {"depreciation": {"amount": 10e9}}
+
+    assert fs.fpa_depreciation(api_accounts)["source"] == "api"
+    result = fs.fpa_depreciation({"note_depreciation": note})
+    assert result["amount"] == 46.93e12 and result["available"] is True
+    assert result["source"] == "note" and result["basis"] == "note_sum"
+    assert fs.fpa_depreciation({})["source"] == "none"
+
+
+def test_fpa_baseline_carries_depreciation_source_and_note():
+    note = {"amount": 46.93e12, "basis": "note_sum", "unit": "백만원",
+            "depreciation": 43.6e12, "amortization": 3.32e12,
+            "note_label": "21. 비용의 성격별 분류 (연결)", "note_url": "https://dart/x"}
+    spec = {2024: dict(FPA_SPEC[2024])}
+    spec[2024].pop("depreciation")
+    company = fpa_company(spec)
+    company["years"][2024]["accounts"]["note_depreciation"] = note
+    baseline = fs.fpa_baseline(company)
+
+    assert baseline["depreciation"] == 46.93e12
+    assert baseline["depreciation_source"] == "note"
+    assert baseline["depreciation_note"]["note_label"] == "21. 비용의 성격별 분류 (연결)"
+    text = fs.depreciation_source_text(baseline)
+    assert "주석 원문 파싱 반영" in text and "백만원" in text
+
+
+def test_depreciation_source_text_three_sources():
+    api = {"depreciation_source": "api"}
+    none = {"depreciation_source": "none"}
+    assert "DART API" in fs.depreciation_source_text(api)
+    assert "미공시" in fs.depreciation_source_text(none)
+    assert "미공시" in fs.depreciation_source_text({})        # 정보가 없어도 문구가 나온다
+
+
+# ---------------------------------------------------------------------------
+# 19. 금융업(은행·보험·지주) 판별 — 리스크·동종업계 분기
+# ---------------------------------------------------------------------------
+
+KB_ACCOUNTS = {
+    "assets": 797_923_033_000_000, "liabilities": 737_093_044_000_000,
+    "equity": 60_829_989_000_000, "op_income": 8_517_711_000_000,
+    "net_income": 5_840_715_000_000, "interest_expense": 16_083_007_000_000,
+    "interest_income": 29_156_100_000_000, "net_interest_income": 13_073_093_000_000,
+    "op_cash_flow": 4_200_000_000_000, "retained_earnings": 38_333_741_000_000,
+    # 매출원가·유동자산·유동부채가 없다 — 은행·보험·지주의 재무제표 구조
+}
+
+FINANCE_SEED = {
+    "00688996": {"corp_code": "00688996", "corp_name": "(주)KB금융지주", "stock_code": "105560",
+                 "induty_code": "64992", "industry_name": "지주회사", "sector": "금융", "order": 1},
+    "00382199": {"corp_code": "00382199", "corp_name": "(주)신한금융지주회사", "stock_code": "055550",
+                 "induty_code": "64992", "industry_name": "지주회사", "sector": "금융", "order": 2},
+    "00547583": {"corp_code": "00547583", "corp_name": "(주)하나금융지주", "stock_code": "086790",
+                 "induty_code": "64992", "industry_name": "지주회사", "sector": "금융", "order": 3},
+    "00000099": {"corp_code": "00000099", "corp_name": "(주)LG", "stock_code": "003550",
+                 "induty_code": "64992", "industry_name": "지주회사", "sector": "생활·기타", "order": 4},
+}
+
+
+def test_financial_industry_info_detects_bank_by_code():
+    info = fs.financial_industry_info(induty_code="64121", accounts={})
+    assert info["is_financial"] is True
+    assert "64121" in info["basis"]
+    assert info["notice"] == fs.FINANCIAL_NOTICE
+
+
+def _account_dicts(values):
+    return {key: {"amount": value} for key, value in values.items()}
+
+
+def test_financial_industry_info_detects_financial_holding_by_structure(monkeypatch):
+    monkeypatch.setattr(fs, "_INDUSTRY_SEED", FINANCE_SEED)
+    info = fs.financial_industry_info(accounts=_account_dicts(KB_ACCOUNTS), corp_code="00688996")
+    assert info["is_financial"] is True
+    assert info["induty_code"] == "64992"
+    assert "매출원가 미공시" in info["basis"]
+    assert "유동자산·유동부채 구분 없음" in info["basis"]
+
+
+def test_financial_industry_info_keeps_industrial_holding_out(monkeypatch):
+    """64992(지주회사)여도 매출원가·유동자산이 있으면 금융업이 아니다(LG 등)."""
+    monkeypatch.setattr(fs, "_INDUSTRY_SEED", FINANCE_SEED)
+    accounts = {"revenue": 80e12, "assets": 100e12, "liabilities": 40e12, "equity": 60e12,
+                "current_assets": 30e12, "current_liab": 20e12, "cost_of_sales": 70e12}
+    info = fs.financial_industry_info(accounts=accounts, corp_code="00000099")
+    assert info["is_financial"] is False and info["basis"] == ""
+
+
+def test_financial_industry_info_does_not_guess_without_data():
+    """자료가 비어 있는 경우(통신 실패)를 금융업으로 단정하지 않는다."""
+    assert fs.financial_industry_info(accounts={})["is_financial"] is False
+    assert fs.financial_industry_info(accounts={"assets": {"amount": 0}})["is_financial"] is False
+
+
+def _kb_company(monkeypatch, accounts=None):
+    monkeypatch.setattr(fs, "_INDUSTRY_SEED", FINANCE_SEED)
+    years_data, years = make_years({2024: accounts or KB_ACCOUNTS})
+    fs.compute_ratios(years_data, years)
+    fs.compute_working_capital(years_data, years)
+    return {"name": "KB금융", "corp_code": "00688996", "stock_code": "105560", "years": years_data}, years
+
+
+def test_evaluate_risk_marks_financial_items_excluded_not_danger(monkeypatch):
+    company, years = _kb_company(monkeypatch)
+    risk = fs.evaluate_risk(company, years)
+
+    items = {item["key"]: item for item in risk["items"]}
+    assert items["current_ratio"]["state"] == "excluded"
+    assert items["debt_ratio"]["state"] == "excluded"
+    assert items["current_ratio"]["max"] == 0 and items["debt_ratio"]["max"] == 0
+    # 부채비율 값은 감추지 않고 메모에 숫자로 남긴다
+    assert "1211.7%" in items["debt_ratio"]["note"] or "1211.6%" in items["debt_ratio"]["note"] \
+        or "%" in items["debt_ratio"]["note"]
+    assert risk["excluded_count"] == 2
+    assert risk["available_count"] == 3                 # 이자보상·현금흐름·부실예측만 평가
+    assert "판정 제외" in risk["comment"]
+    assert risk["financial"]["is_financial"] is True
+    # 판정 제외 항목은 분모에서 빠진다: 남은 3항목 × 20점이 만점
+    earned = sum(item["score"] for item in risk["items"])
+    assert risk["score"] == round(earned / 60 * 100)
+
+
+def test_evaluate_risk_manufacturer_keeps_current_ratio_judgement(monkeypatch):
+    monkeypatch.setattr(fs, "_INDUSTRY_SEED", {})
+    years_data, years = make_years(NORMAL)
+    fs.compute_ratios(years_data, years)
+    risk = fs.evaluate_risk({"name": "정상", "corp_code": "00000000", "stock_code": "", "years": years_data}, years)
+    items = {item["key"]: item for item in risk["items"]}
+    assert items["current_ratio"]["state"] in ("safe", "caution", "danger")
+    assert risk["excluded_count"] == 0
+    assert risk["financial"]["is_financial"] is False
+
+
+def test_metric_values_include_finance_metrics():
+    years_data, years = make_years({2025: KB_ACCOUNTS})
+    fs.compute_ratios(years_data, years)
+    values = fs.metric_values(years_data[2025])
+    assert values["roe"] == pytest.approx(5_840_715_000_000 / 60_829_989_000_000 * 100)
+    assert values["roa"] == pytest.approx(5_840_715_000_000 / 797_923_033_000_000 * 100)
+    assert values["net_margin"] is None                 # 매출액 단일 계정이 없다
+
+
+def test_industry_comparison_uses_financial_metrics_for_bank(monkeypatch):
+    monkeypatch.setattr(fs, "_INDUSTRY_SEED", FINANCE_SEED)
+    target, years = _kb_company(monkeypatch)
+    analysis = {"companies": [target], "years": years}
+
+    peer_accounts = {
+        "00382199": {"assets": 700e12, "liabilities": 650e12, "equity": 50e12,
+                     "op_income": 6e12, "net_income": 4.5e12, "interest_expense": 14e12},
+        "00547583": {"assets": 600e12, "liabilities": 555e12, "equity": 45e12,
+                     "op_income": 5e12, "net_income": 3.6e12, "interest_expense": 12e12},
+    }
+
+    def fake_fetch_statement(api_key, corp_code, year, fs_div_pref=("CFS", "OFS")):
+        return "CFS", "연결재무제표", "2025", {k: {"amount": v} for k, v in peer_accounts[corp_code].items()}
+
+    monkeypatch.setattr(fs, "fetch_statement", fake_fetch_statement)
+    monkeypatch.setattr(fs, "fetch_extra_accounts", lambda *a, **k: {})
+
+    result = fs.build_industry_comparison("key", analysis, max_peers=2)
+    assert result["status"] == "ok"
+    assert result["financial"]["is_financial"] is True
+    keys = [row["key"] for row in result["rows"]]
+    assert keys == ["op_margin", "net_margin", "roe", "roa", "debt_ratio"]
+    assert "current_ratio" not in keys and "ccc" not in keys
+    assert [spec[0] for spec in result["metric_specs"]] == keys
+    # KB금융 2025 ROE = 5.84조 ÷ 60.83조 = 9.6%
+    roe = {row["key"]: row for row in result["rows"]}["roe"]
+    assert roe["target"] == pytest.approx(5_840_715_000_000 / 60_829_989_000_000 * 100, rel=1e-6)
+
+
+def test_fpa_baseline_flags_financial_company(monkeypatch):
+    company, years = _kb_company(monkeypatch)
+    baseline = fs.fpa_baseline(company, years[-1])
+    assert baseline["financial"]["is_financial"] is True
+    assert baseline["revenue"] is None
+    result = fs.simulate_fpa_scenarios(company, years[-1])
+    assert result["status"] == "no_revenue"             # 매출액이 없으면 시뮬레이션하지 않는다

@@ -48,6 +48,8 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from html import unescape as html_unescape
+from html.parser import HTMLParser
 from xml.etree import ElementTree
 
 # ---------------------------------------------------------------------------
@@ -388,6 +390,14 @@ EXTRA_SPECS = [
     {"key": "interest_expense", "label": "이자비용", "sj_div": ("IS", "CIS"),
      "names": ("이자비용", "금융비용", "이자비용(금융비용)"),
      "ids": ("ifrs-full_InterestExpense", "ifrs-full_FinanceCosts")},
+    # 은행·보험·금융지주는 이자수익과 순이자손익이 사실상의 '매출'이다.
+    # 금융업 화면에서 이자비용/이자수익 구조를 보여 주기 위해 함께 뽑는다.
+    {"key": "interest_income", "label": "이자수익", "sj_div": ("IS", "CIS"),
+     "names": ("이자수익", "이자수익(금융수익)"),
+     "ids": ("ifrs-full_RevenueFromInterest", "ifrs-full_InterestIncome")},
+    {"key": "net_interest_income", "label": "순이자손익", "sj_div": ("IS", "CIS"),
+     "names": ("순이자손익", "순이자이익", "순이자수익"),
+     "ids": ("ifrs-full_InterestRevenueExpense",)},
     {"key": "op_cash_flow", "label": "영업활동현금흐름", "sj_div": ("CF",),
      "names": ("영업활동현금흐름", "영업활동 현금흐름", "영업활동으로 인한 현금흐름"),
      "ids": ("ifrs-full_CashFlowsFromUsedInOperatingActivities",)},
@@ -1081,6 +1091,378 @@ def statement_link_label(links, kind):
     return label or STATEMENT_KIND_LABEL.get(kind, "재무제표")
 
 
+# ---------------------------------------------------------------------------
+# 4-2-1. 주석 원문에서 감가상각비 파싱 (FCF 정확도 보완)
+# ---------------------------------------------------------------------------
+#
+#  왜 필요한가
+#    OpenDART fnlttSinglAcntAll(전체 재무제표)은 회사에 따라 현금흐름표 '조정'의
+#    감가상각비·무형자산상각비를 합계 한 줄로만 주거나 아예 주지 않는다(예: 삼성전자).
+#    그런 해는 EBITDA = 영업이익으로 계산되어 FCF가 그만큼 작게(보수적으로) 나온다.
+#
+#  무엇을 하는가
+#    같은 사업보고서의 원문(main.do 목차 → report/viewer.do)에서
+#      (1) '비용의 성격별 분류' 주석  (2) '현금흐름표' 주석
+#      (3) '유형자산' 주석          (4) '무형자산' 주석
+#    순서로 표를 읽어 당기 감가상각비·무형자산상각비를 찾고, 표에 적힌 단위
+#    (원·천원·백만원·억원·조원)를 판별해 '원' 단위로 정규화한다.
+#
+#  안전장치 (틀린 숫자를 넣느니 '미공시'로 두는 쪽을 택한다)
+#    · 표의 단위 표기가 없으면 쓰지 않는다 — 단위를 모르면 1,000배 틀릴 수 있다.
+#    · '전기' 표는 건너뛴다(당기 값만 쓴다).
+#    · 합산 표기('감가상각비 및 상각비')가 있으면 그것만 쓰고, 없을 때만 항목을 더한다.
+#    · 감가상각비 없이 무형자산상각비만 찾히면 쓰지 않는다(과소 계상 방지).
+#    · 같은 표에 같은 항목이 두 번 나오면(변동표의 취득원가·감가상각누계액 등)
+#      어느 쪽이 당기 비용인지 확정할 수 없으므로 그 표는 버린다.
+#    · 네트워크·형식 오류는 예외 없이 None(미공시)으로 물러난다.
+
+NOTE_TOC_TIMEOUT = 20                # 주석 원문 조회 제한 시간(초)
+NOTE_TOC_MAX_PER_GROUP = 2           # 한 종류(성격별·현금흐름표 등)에서 시도할 목차 수
+NOTE_NODE_CACHE = {}                 # rcept_no → [목차 노드] (한 실행 안에서 재사용)
+NOTE_DEPRECIATION_CACHE = {}         # rcept_no → 파싱 결과 dict | None
+
+# 목차 이름으로 찾을 주석 종류 — 앞에 있을수록 우선(같은 종류 안에서는 '연결' 우선)
+NOTE_SOURCE_GROUPS = (
+    ("nature", ("비용의성격별분류",)),
+    ("cashflow", ("현금흐름표",)),
+    ("ppe", ("유형자산",)),
+    ("intangible", ("무형자산",)),
+)
+NOTE_GROUP_LABEL = {
+    "nature": "비용의 성격별 분류",
+    "cashflow": "현금흐름표 주석",
+    "ppe": "유형자산 주석",
+    "intangible": "무형자산 주석",
+}
+
+# 표에 적힌 단위 → 원 단위로 곱할 값
+NOTE_UNIT_FACTOR = {"원": 1.0, "천원": 1e3, "백만원": 1e6, "억원": 1e8, "조원": 1e12}
+# '(단위 : 백만원)' 같은 표기. 긴 단위를 먼저 찾아야 '원'으로 잘못 잡히지 않는다.
+_NOTE_UNIT_RE = re.compile(r"단위\s*[:：]?\s*(조원|억원|백만원|천원|원)")
+
+# 감가상각비로 인정할 계정명 (공백을 모두 제거한 형태로 비교한다)
+NOTE_DEPRECIATION_LABELS = {
+    "da_combined": (
+        "감가상각비및상각비", "감가상각비와상각비",
+        "감가상각비와무형자산상각비", "감가상각비및무형자산상각비",
+        "감가상각비·무형자산상각비", "감가상각비등",
+    ),
+    "depreciation": ("감가상각비", "유형자산감가상각비", "유형자산에대한감가상각비"),
+    "amortization": ("무형자산상각비", "무형자산에대한상각비"),
+    "lease": ("사용권자산감가상각비", "사용권자산에대한감가상각비"),
+    "investment_property": ("투자부동산감가상각비",),
+}
+_LABEL_TO_KEY = {label: key for key, labels in NOTE_DEPRECIATION_LABELS.items()
+                 for label in labels}
+
+
+def _note_cell_text(raw):
+    """표 셀 문자열 정리 — HTML 엔티티 해제, 줄바꿈·nbsp를 공백으로."""
+    text = html_unescape(raw or "")
+    text = text.replace("\xa0", " ").replace("\u3000", " ").replace("\n", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _note_label_key(text):
+    """계정명 비교용 — 모든 공백을 없애고 '*'·'※' 같은 표시를 뗀다."""
+    return re.sub(r"[\s*※]+$", "", (text or "").replace(" ", "")).strip()
+
+
+class _NoteTableParser(HTMLParser):
+    """주석 원문 HTML에서 <table>을 순서대로 뽑는다(외부 패키지 없이).
+
+    반환 구조: [{"context_before": 표 앞의 글자, "rows": [[셀, 셀, ...], ...]}, ...]
+    셀 병합(rowspan/colspan)은 펼치지 않는다 — 이 파서가 쓰는 표는
+    '항목명 | 당기' 처럼 라벨과 숫자가 서로 다른 칸에 있기 때문이다.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tables = []
+        self._stack = []
+        self._row = None
+        self._cell = None
+        self._outside = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = (tag or "").lower()
+        if tag == "table":
+            table = {"context_before": " ".join(self._outside)[-600:], "rows": []}
+            self.tables.append(table)
+            self._stack.append(table)
+            self._outside = []
+            self._row = None
+            self._cell = None
+        elif tag == "tr" and self._stack:
+            self._row = []
+            self._stack[-1]["rows"].append(self._row)
+            self._cell = None
+        elif tag in ("td", "th") and self._row is not None:
+            self._cell = []
+        elif tag == "br" and self._cell is not None:
+            self._cell.append(" ")
+
+    def handle_endtag(self, tag):
+        tag = (tag or "").lower()
+        if tag in ("td", "th") and self._cell is not None and self._row is not None:
+            self._row.append(_note_cell_text("".join(self._cell)))
+            self._cell = None
+        elif tag == "tr":
+            self._row = None
+            self._cell = None
+        elif tag == "table" and self._stack:
+            self._stack.pop()
+            self._row = None
+            self._cell = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+        elif not self._stack:
+            self._outside.append(data)
+
+
+def parse_note_tables(html):
+    """주석 HTML → 표 목록(파싱 실패해도 빈 목록)."""
+    if not html:
+        return []
+    parser = _NoteTableParser()
+    try:
+        parser.feed(html)
+    except Exception:                 # 형식이 깨진 HTML도 분석을 막지 않는다
+        return parser.tables
+    return parser.tables
+
+
+def detect_note_unit(text):
+    """'(단위 : 백만원)' → '백만원'. 없으면 None(단위를 모르면 값을 쓰지 않는다)."""
+    match = _NOTE_UNIT_RE.search(text or "")
+    return match.group(1) if match else None
+
+
+def _note_period(text):
+    """표 앞 문맥의 마지막 '당기/전기' 표기. 없으면 None."""
+    last = None
+    for match in re.finditer(r"당기|전기", text or ""):
+        last = match.group(0)
+    return last
+
+
+def _parse_note_number(text):
+    """표 셀의 숫자 — '43,605,740' → 43605740, '(7,249,614)' → 음수, '-' → None."""
+    value = (text or "").replace(" ", "").strip()
+    if not value or value in ("-", "－", "—", "–", "△"):
+        return None
+    negative = value.startswith("(") and value.endswith(")")
+    if negative:
+        value = value[1:-1]
+        if value.startswith("-"):
+            value = value[1:]
+    value = value.replace(",", "")
+    if not re.fullmatch(r"-?\d+(?:\.\d+)?", value):
+        return None
+    number = float(value)
+    return -number if negative else number
+
+
+def _note_table_context(tables, index):
+    """표 하나의 단위·기간 판단용 문맥 — 앞 글자 + 바로 앞 표의 끝줄 + 이 표의 첫줄."""
+    parts = [tables[index].get("context_before") or ""]
+    if index > 0:
+        for row in tables[index - 1]["rows"][-3:]:
+            parts.extend(row)
+    for row in tables[index]["rows"][:3]:
+        parts.extend(row)
+    return " ".join(parts)
+
+
+def _depreciation_entries_in_table(table):
+    """표 하나에서 {항목키: 금액} — 같은 항목이 두 번 나오면 None(모호한 표)."""
+    entries = {}
+    ambiguous = False
+    for row in table.get("rows") or []:
+        label_index, key = None, None
+        for index, cell in enumerate(row):
+            candidate = _LABEL_TO_KEY.get(_note_label_key(cell))
+            if candidate:
+                label_index, key = index, candidate
+                break
+        if key is None:
+            continue
+        values = [(index, value) for index, value in
+                  ((index, _parse_note_number(cell)) for index, cell in enumerate(row))
+                  if value is not None and index > label_index]
+        if not values:
+            continue
+        if key in entries:
+            ambiguous = True
+        entries[key] = values[0][1]
+    return None if ambiguous else entries
+
+
+def depreciation_from_note_html(html):
+    """주석 HTML 한 장 → 감가상각비(원 단위) dict. 못 찾으면 None.
+
+    반환: {amount, basis, unit, depreciation, amortization, lease,
+           investment_property, combined, detail}
+    """
+    tables = parse_note_tables(html)
+    for index, table in enumerate(tables):
+        context = _note_table_context(tables, index)
+        if _note_period(context) == "전기":        # 전기 표는 쓰지 않는다
+            continue
+        unit = detect_note_unit(context)
+        if not unit:                              # 단위가 없으면 값을 쓰지 않는다
+            continue
+        entries = _depreciation_entries_in_table(table)
+        if not entries:
+            continue
+        factor = NOTE_UNIT_FACTOR[unit]
+        amounts = {key: abs(value) * factor for key, value in entries.items() if value}
+        combined = amounts.get("da_combined")
+        if combined:
+            basis = "combined"
+            total = combined
+        elif amounts.get("depreciation"):
+            total = sum(amounts.get(key, 0.0) for key in
+                        ("depreciation", "amortization", "lease", "investment_property"))
+            basis = "sum"
+        else:
+            # 무형자산상각비만 찾힌 표는 감가상각비를 빠뜨린 것이라 쓰지 않는다
+            continue
+        if not total or total <= 0:
+            continue
+        detail = []
+        for key in ("depreciation", "amortization", "lease", "investment_property"):
+            if amounts.get(key):
+                detail.append((key, amounts[key]))
+        return {
+            "amount": total,
+            "basis": "note_combined" if basis == "combined" else "note_sum",
+            "unit": unit,
+            "unit_factor": factor,
+            "depreciation": amounts.get("depreciation"),
+            "amortization": amounts.get("amortization"),
+            "lease": amounts.get("lease"),
+            "investment_property": amounts.get("investment_property"),
+            "combined": combined,
+            "detail": detail,
+        }
+    return None
+
+
+def note_toc_nodes(rcept_no, timeout=NOTE_TOC_TIMEOUT, use_cache=True):
+    """사업보고서 main.do 목차 노드(주석 포함). 실패하면 빈 목록."""
+    rcept_no = (rcept_no or "").strip()
+    if not rcept_no:
+        return []
+    if use_cache and rcept_no in NOTE_NODE_CACHE:
+        return NOTE_NODE_CACHE[rcept_no]
+    try:
+        html = _fetch_dart_html(DART_MAIN_DOC % rcept_no, timeout)
+        nodes = parse_toc_nodes(html)
+    except Exception:
+        nodes = []
+    NOTE_NODE_CACHE[rcept_no] = nodes
+    return nodes
+
+
+def _note_candidates(nodes):
+    """목차 노드 → [(종류, 노드)] — 우선순위 순, 같은 종류 안에서는 '연결' 먼저."""
+    prepared = []
+    for order, group in enumerate(NOTE_SOURCE_GROUPS):
+        name, patterns = group
+        hits = []
+        for node in nodes or []:
+            label = toc_label(node.get("text"))
+            if not label:
+                continue
+            if any(label.startswith(pattern) for pattern in patterns):
+                # 현금흐름표는 '재무제표 한 장'(연결현금흐름표)과 주석을 구분한다
+                if name == "cashflow" and label.startswith("연결"):
+                    continue
+                hits.append((0 if "연결" in label else 1, label, node))
+        hits.sort(key=lambda item: (item[0], item[1]))
+        for _rank, _label, node in hits[:NOTE_TOC_MAX_PER_GROUP]:
+            if viewer_url(node):
+                prepared.append((order, name, node))
+    prepared.sort(key=lambda item: item[0])
+    return [(name, node) for _order, name, node in prepared]
+
+
+def fetch_depreciation_note(rcept_no, timeout=NOTE_TOC_TIMEOUT, use_cache=True):
+    """
+    사업보고서 주석 원문에서 당기 감가상각비를 찾는다.
+
+    반환: {amount, basis, unit, ..., note_group, note_label, note_url, rcept_no, source}
+          못 찾거나 네트워크가 막히면 None → 호출한 쪽이 '미공시'로 둔다.
+    """
+    rcept_no = (rcept_no or "").strip()
+    if not rcept_no:
+        return None
+    if use_cache and rcept_no in NOTE_DEPRECIATION_CACHE:
+        return NOTE_DEPRECIATION_CACHE[rcept_no]
+
+    result = None
+    try:
+        for group, node in _note_candidates(note_toc_nodes(rcept_no, timeout)):
+            url = viewer_url(node)
+            try:
+                html = _fetch_dart_html(url, timeout)
+            except Exception:
+                continue
+            parsed = depreciation_from_note_html(html)
+            if parsed and parsed.get("amount"):
+                parsed.update({
+                    "note_group": group,
+                    "note_label": (node.get("text") or "").strip(),
+                    "note_url": url,
+                    "rcept_no": rcept_no,
+                    "source": "note",
+                })
+                result = parsed
+                break
+    except Exception:
+        result = None
+    NOTE_DEPRECIATION_CACHE[rcept_no] = result
+    return result
+
+
+def note_depreciation_plausible(note, accounts):
+    """주석에서 읽은 상각비가 그 회사 규모에 맞는지 최소한만 검산한다.
+
+    감가상각비는 자산총계를 넘을 수 없다. 이 한 줄로 1,000배·1,000,000배 단위 오류를 막는다.
+    """
+    amount = (note or {}).get("amount")
+    if not amount or amount <= 0:
+        return False
+    assets = ((accounts or {}).get("assets") or {}).get("amount")
+    if assets and amount > assets:
+        return False
+    return True
+
+
+def depreciation_source_text(baseline):
+    """탭 ④·엑셀에 한 줄로 붙는 '감가상각비 출처' 캡션."""
+    baseline = baseline or {}
+    source = baseline.get("depreciation_source") or "none"
+    note = baseline.get("depreciation_note") or {}
+    if source == "note":
+        parts = []
+        if note.get("depreciation"):
+            parts.append("감가상각비 %s" % short_won(note["depreciation"]))
+        if note.get("amortization"):
+            parts.append("무형자산상각비 %s" % short_won(note["amortization"]))
+        if note.get("combined"):
+            parts.append("감가상각비 및 상각비 %s" % short_won(note["combined"]))
+        detail = (" (%s)" % " · ".join(parts)) if parts else ""
+        return ("감가상각비 출처: 주석 원문 파싱 반영 — %s · %s%s"
+                % (note.get("note_label") or "주석", note.get("unit") or "원", detail))
+    if source == "api":
+        return "감가상각비 출처: DART API 현금흐름표 조정 항목(당기)"
+    return "감가상각비 출처: 미공시 — DART API·주석 원문 모두에서 찾지 못해 EBITDA를 영업이익으로 보수 계산합니다."
+
+
 def fmt(value, digits=1, suffix="%"):
     """숫자에 단위를 붙인 문자열. 값이 없으면 '-'. (단위가 %가 아니어도 쓸 수 있게 suffix로 받는다)"""
     if value is None:
@@ -1445,23 +1827,32 @@ def fpa_depreciation(accounts):
     """
     감가상각비(유·무형자산 상각비).
 
-    '감가상각비 및 상각비'처럼 한 줄로 합쳐 공시하면 그 값을 그대로 쓰고,
-    없을 때만 (감가상각비 + 무형자산상각비 + 사용권자산감가상각비)를 더한다(중복 합산 방지).
+    ① DART API(현금흐름표 조정)에 '감가상각비 및 상각비' 한 줄이 있으면 그 값을 쓰고,
+    ② 없을 때만 (감가상각비 + 무형자산상각비 + 사용권자산감가상각비)를 더한다(중복 합산 방지).
+    ③ API에 아예 없으면 주석 원문 파싱값(accounts["note_depreciation"])을 쓴다.
 
-    반환: {"amount": 값 또는 None, "available": bool, "parts": {...}, "basis": "combined"/"sum"/"none"}
+    반환: {"amount", "available", "parts", "basis", "source"}
+      basis  : combined / sum / note / none
+      source : api / note / none   ← 화면·엑셀에 출처를 1줄로 표시한다
     """
     combined = _fpa_amount(accounts, "da_combined")
     if combined:
         return {"amount": abs(combined), "available": True,
-                "parts": {"da_combined": abs(combined)}, "basis": "combined"}
+                "parts": {"da_combined": abs(combined)}, "basis": "combined", "source": "api"}
     parts = {}
     for key in ("depreciation", "amortization", "lease_depreciation"):
         value = _fpa_amount(accounts, key)
         if value:
             parts[key] = abs(value)
     if parts:
-        return {"amount": sum(parts.values()), "available": True, "parts": parts, "basis": "sum"}
-    return {"amount": None, "available": False, "parts": {}, "basis": "none"}
+        return {"amount": sum(parts.values()), "available": True, "parts": parts,
+                "basis": "sum", "source": "api"}
+    note = (accounts or {}).get("note_depreciation")
+    if isinstance(note, dict) and note.get("amount"):
+        return {"amount": float(note["amount"]), "available": True,
+                "parts": {key: value for key, value in (note.get("detail") or [])},
+                "basis": note.get("basis") or "note", "source": "note"}
+    return {"amount": None, "available": False, "parts": {}, "basis": "none", "source": "none"}
 
 
 def fpa_total_borrowings(accounts):
@@ -1485,6 +1876,12 @@ def fpa_capex(accounts):
     if value is None:
         return {"amount": None, "available": False}
     return {"amount": abs(value), "available": True}
+
+
+def api_depreciation_available(accounts):
+    """DART API(현금흐름표 조정)만으로 감가상각비를 구할 수 있는지."""
+    return bool(_fpa_amount(accounts, "da_combined")) or any(
+        _fpa_amount(accounts, key) for key in ("depreciation", "amortization", "lease_depreciation"))
 
 
 def fpa_baseline(company, year=None):
@@ -1567,7 +1964,14 @@ def fpa_baseline(company, year=None):
         "depreciation": depreciation["amount"],
         "depreciation_available": depreciation["available"],
         "depreciation_basis": depreciation["basis"],
+        "depreciation_source": depreciation["source"],
+        "depreciation_note": (accounts.get("note_depreciation") or None),
         "depreciation_parts": depreciation["parts"],
+        # 금융업(은행·보험·지주) 여부 — 화면·시뮬레이터가 제조업 지표를 기계적으로 쓰지 않게
+        "financial": financial_industry_info(
+            accounts=accounts, corp_code=(company or {}).get("corp_code"),
+            stock_code=(company or {}).get("stock_code"),
+        ),
         "capex": capex["amount"],
         "capex_available": capex["available"],
         "capex_ratio": capex_ratio,
@@ -1907,6 +2311,127 @@ def simulate_fpa_scenarios(company, year=None, revenue_growth_pct=0.0,
     }
 
 
+# 4-1-3. 금융업(은행·보험·증권·지주) 판별
+# ---------------------------------------------------------------------------
+#
+#  왜 따로 판별하나
+#    금융업은 재무제표 구조가 다르다. 은행·보험은 자산을 유동·비유동으로 나누지 않고
+#    (유동자산·유동부채 계정이 없다), 매출원가 대신 이자비용·보험금융비용이 든다.
+#    그래서 유동비율·CCC·매출총이익률은 계산 자체가 안 되고, 부채비율은 예수부채 때문에
+#    1,000%를 넘는 것이 정상이다. 이런 지표를 제조업 기준으로 감점하면 금융업은 늘 '위험'이 된다.
+#
+#  판별 근거 (둘을 함께 본다 — 업종코드만으로는 부족하다)
+#    ① 업종코드(induty_code, KSIC 10차): 641 은행, 651·652 보험, 661·662 증권 등은 확정.
+#       64992(지주회사)는 금융지주(KB·신한·하나·우리)와 일반 지주(LG·LS·HD한국조선해양)가
+#       섞여 있어 코드만으로는 판단하지 않는다.
+#    ② 재무제표 구조: 매출원가가 없고 유동자산·유동부채 구분도 없으면 금융업 구조로 본다.
+#       (이 경우 유동비율·CCC는 계산이 안 되므로 제조업 지표를 적용해도 의미가 없다)
+#
+#  이 판별은 화면을 '숨기는' 장치가 아니다. 계산이 안 되는 지표를 '판정 제외'로
+#  분명히 밝히고, 대신 금융업에서 읽을 수 있는 지표(ROE·ROA·이자손익 구조)를 보여 주기 위한 것이다.
+
+FINANCIAL_NOTICE = (
+    "금융업(은행·보험·지주)은 일반 기업과 재무제표 구조가 달라 "
+    "운전자본(CCC)·유동비율 분석에서 제외됩니다."
+)
+
+# 확정적으로 금융업인 업종코드 앞자리 (은행·신탁·집합투자·보험·증권)
+FINANCIAL_CODE_PREFIXES = ("641", "642", "651", "652", "661", "662", "663")
+# 649(기타 금융업)는 64992 지주회사가 섞여 있어 구조 신호와 함께 볼 때만 금융업으로 본다
+FINANCIAL_OTHER_PREFIXES = ("649",)
+FINANCIAL_HOLDING_CODE = "64992"
+
+
+def financial_structure_signals(accounts):
+    """재무제표 구조만으로 본 금융업 신호 — (구조적_금융업, 근거 목록)."""
+    def amount(key):
+        item = (accounts or {}).get(key)
+        return item.get("amount") if isinstance(item, dict) else None
+
+    revenue, assets = amount("revenue"), amount("assets")
+    cogs, current_assets, current_liab = amount("cost_of_sales"), amount("current_assets"), amount("current_liab")
+    liabilities, equity = amount("liabilities"), amount("equity")
+    if assets is None and revenue is None and liabilities is None:
+        return False, []                 # 자료가 아예 없는 경우(통신 실패)는 금융업으로 단정하지 않는다
+    reasons = []
+    no_cogs = cogs is None or cogs == 0
+    no_split = current_assets is None and current_liab is None
+    # 금융업은 예수부채·차입부채가 영업의 원료라 자산의 대부분이 부채다(은행 90% 안팎).
+    # 제조·서비스업과 헷갈리지 않게 이 신호까지 함께 볼 때만 '구조적 금융업'으로 본다.
+    high_leverage = bool(assets and liabilities is not None and equity is not None
+                         and equity > 0 and liabilities / assets >= 0.6)
+    if no_cogs:
+        reasons.append("매출원가 미공시")
+    if no_split:
+        reasons.append("유동자산·유동부채 구분 없음")
+    if high_leverage:
+        reasons.append("자산 대비 부채 60% 이상(예수·차입부채 구조)")
+    return bool(no_cogs and no_split and high_leverage), reasons
+
+
+def financial_industry_info(induty_code=None, accounts=None, sector="",
+                            corp_code=None, stock_code=None):
+    """
+    금융업 여부와 그 근거.
+
+    반환: {is_financial, label, induty_code, sector, reasons, structure, basis, notice}
+      · basis 는 화면 툴팁·캡션에 그대로 쓰는 한 줄 (예: "업종코드 64992(지주회사) · 매출원가 미공시 · 유동자산·유동부채 구분 없음")
+    """
+    code = str(induty_code or "").strip()
+    sector = str(sector or "").strip()
+    if not code and (corp_code or stock_code):
+        record = industry_record(corp_code, stock_code)
+        if record:
+            code = str(record.get("induty_code") or "").strip()
+            sector = sector or str(record.get("sector") or "").strip()
+
+    structural, structure_reasons = financial_structure_signals(accounts)
+    sector_hit = sector == "금융"
+    reasons = list(structure_reasons)
+
+    fixed_code = bool(code) and code.startswith(FINANCIAL_CODE_PREFIXES)
+    other_finance_code = bool(code) and code.startswith(FINANCIAL_OTHER_PREFIXES)
+    holding_code = code == FINANCIAL_HOLDING_CODE
+
+    is_financial = False
+    if fixed_code:
+        is_financial = True
+        reasons.insert(0, "업종코드 %s(은행·보험·증권)" % code)
+    elif other_finance_code:
+        # 기타 금융업·지주회사 — 금융업군 시드(금융)이거나 재무제표 구조가 금융업일 때만
+        if sector_hit:
+            reasons.insert(0, "업종군 금융 · 업종코드 %s" % code)
+            is_financial = True
+        if structural:
+            if not is_financial:
+                reasons.insert(0, "업종코드 %s(지주회사·기타 금융업)" % code)
+            is_financial = True
+    elif structural and (sector_hit or not code):
+        reasons.insert(0, "업종코드 미확인 · 재무제표 구조" if not code else "업종군 금융 · 재무제표 구조")
+        is_financial = True
+
+    if holding_code and not is_financial and sector_hit:
+        is_financial = True
+        reasons.insert(0, "업종군 금융 · 업종코드 %s(지주회사)" % code)
+
+    label = "금융업" if is_financial else ""
+    basis = " · ".join(reasons) if is_financial else ""
+    return {
+        "is_financial": is_financial,
+        "label": label,
+        "induty_code": code,
+        "sector": sector,
+        "reasons": reasons if is_financial else [],
+        "structure": {
+            "no_cost_of_sales": "매출원가 미공시" in structure_reasons,
+            "no_current_split": "유동자산·유동부채 구분 없음" in structure_reasons,
+            "high_leverage": "자산 대비 부채 60% 이상(예수·차입부채 구조)" in structure_reasons,
+        },
+        "basis": basis,
+        "notice": FINANCIAL_NOTICE if is_financial else "",
+    }
+
+
 # 4-2. 5대 재무 리스크 진단 (신호등 + 100점 종합 점수)
 # ---------------------------------------------------------------------------
 #
@@ -1914,6 +2439,8 @@ def simulate_fpa_scenarios(company, year=None, revenue_growth_pct=0.0,
 #   🟢 안전 20점 / 🟡 주의 10점 / 🔴 위험 0점
 # 데이터를 못 구한 항목(N/A)은 분모에서 빼고 남은 항목으로 100점으로 환산한다.
 #   종합점수 = (획득점수 합 ÷ 평가가능 항목 만점 합) × 100
+# 금융업에서 계산이 안 되는 항목(유동비율·부채비율)은 '판정 제외'로 빼고,
+#   제외한 항목도 분모에서 뺀다(제조업 기준 감점을 기계적으로 적용하지 않는다).
 #
 # 등급: 85점 이상 🟢 안전 / 60점 이상 🟡 주의 / 60점 미만 🔴 위험
 
@@ -1922,6 +2449,7 @@ RISK_META = {
     "safe": {"label": "안전", "light": "🟢", "class": "safe"},
     "caution": {"label": "주의", "light": "🟡", "class": "caution"},
     "danger": {"label": "위험", "light": "🔴", "class": "danger"},
+    "excluded": {"label": "판정 제외", "light": "➖", "class": "excluded"},
     "na": {"label": "N/A", "light": "⚪", "class": "na"},
 }
 
@@ -2024,6 +2552,10 @@ def evaluate_risk(company, years):
     accounts = entry["accounts"]
     ratios = entry["ratios"]
     impaired = capital_impaired_info(company, latest)
+    financial = financial_industry_info(
+        accounts=accounts, corp_code=company.get("corp_code"),
+        stock_code=company.get("stock_code"))
+    is_financial = bool(financial["is_financial"])
     items = []
 
     def add(key, label, value_text, state, note=""):
@@ -2033,14 +2565,18 @@ def evaluate_risk(company, years):
             "value_text": value_text,
             "state": state,
             "score": RISK_SCORES.get(state, 0),
-            "max": 20 if state != "na" else 0,
+            "max": 20 if state not in ("na", "excluded") else 0,
             "note": note,
             "criteria": RISK_CRITERIA[key],
         })
 
     # --- (1) 유동비율 ---
     current_ratio = ratios.get("current_ratio")
-    if current_ratio is None:
+    if is_financial:
+        # 금융업은 유동자산·유동부채 구분이 없는 재무제표라 이 지표가 성립하지 않는다.
+        add("current_ratio", "유동비율", "판정 제외", "excluded",
+            "금융업 구조 — 유동자산·유동부채로 나누지 않는 재무제표입니다")
+    elif current_ratio is None:
         add("current_ratio", "유동비율", "계산 불가", "na", "유동자산·유동부채 미공시(금융회사 등)")
     else:
         state = "safe" if current_ratio >= 150 else ("caution" if current_ratio >= 100 else "danger")
@@ -2053,6 +2589,12 @@ def evaluate_risk(company, years):
         # N/A로 두면 분모에서 빠져 위험 기업의 점수가 오히려 올라간다.
         add("debt_ratio", "부채비율", "자본잠식", "danger",
             "%s — 부채비율·ROE는 음수 자본으로 왜곡되어 계산하지 않습니다" % impaired["text"])
+    elif is_financial:
+        # 예수부채·차입부채가 영업의 원료인 업종이라 부채비율 1,000%가 정상이다.
+        # 값을 감추지 않고 숫자를 메모에 남긴 뒤 판정에서만 뺀다(자본적정성은 BIS비율 등 별도 지표 영역).
+        add("debt_ratio", "부채비율", "판정 제외", "excluded",
+            "금융업 구조 — 공시 부채비율 %s. 예수부채·차입부채가 커 구조적으로 높습니다"
+            % (pct(debt_ratio) if debt_ratio is not None else "-"))
     elif debt_ratio is None:
         add("debt_ratio", "부채비율", "계산 불가", "na", "자본총계·부채총계 미공시")
     else:
@@ -2072,6 +2614,8 @@ def evaluate_risk(company, years):
         coverage = op_income / interest["amount"]
         state = "safe" if coverage >= 3 else ("caution" if coverage >= 1 else "danger")
         note = "%s 기준" % interest.get("account_nm", "이자비용")
+        if is_financial:
+            note += " (금융업은 이자비용이 영업의 원가라 제조업과 해석이 다릅니다)"
         add("interest_coverage", "이자보상배율", "%.1f배" % coverage, state, note)
 
     # --- (4) 현금흐름 건전성 (영업활동현금흐름 vs 당기순이익) ---
@@ -2114,10 +2658,12 @@ def evaluate_risk(company, years):
             value_text += " · %d년 연속 적자" % streak
         band = "안전" if z_score >= 2.6 else ("회색" if z_score >= 1.1 else "부실")
         streak_text = "%d년 연속 영업적자" % streak if streak else "최근 3개년 영업흑자"
-        add("solvency", "연속 적자·부실 예측", value_text, state,
-            "%s · Z'' %s 구간" % (streak_text, band))
+        solvency_note = "%s · Z'' %s 구간" % (streak_text, band)
+        if is_financial:
+            solvency_note += " · 금융업은 유동자산·부채 구분이 없어 Z''가 낮게 나오는 참고치입니다"
+        add("solvency", "연속 적자·부실 예측", value_text, state, solvency_note)
 
-    # --- 종합 점수: N/A 항목은 분모에서 제외하고 100점으로 환산 ---
+    # --- 종합 점수: N/A·판정 제외 항목은 분모에서 뺀다 ---
     earned = sum(item["score"] for item in items)
     available_max = sum(item["max"] for item in items)
     score = round(earned / available_max * 100) if available_max else 0
@@ -2141,6 +2687,10 @@ def evaluate_risk(company, years):
         phrases.append("안전 %d개 항목(%s)" % (len(safes), ", ".join(i["label"] for i in safes)))
     if nas:
         phrases.append("판정 불가 %d개(%s)" % (len(nas), ", ".join(i["label"] for i in nas)))
+    excluded = [i for i in items if i["state"] == "excluded"]
+    if excluded:
+        phrases.append("금융업 구조로 판정 제외 %d개(%s)" % (
+            len(excluded), ", ".join(i["label"] for i in excluded)))
 
     headline = {
         "safe": "재무 리스크가 낮습니다",
@@ -2160,7 +2710,9 @@ def evaluate_risk(company, years):
         "comment": comment,
         "z_score": z_score,
         "op_loss_streak": streak,
-        "available_count": sum(1 for i in items if i["state"] != "na"),
+        "available_count": sum(1 for i in items if i["state"] not in ("na", "excluded")),
+        "excluded_count": sum(1 for i in items if i["state"] == "excluded"),
+        "financial": financial,
         "capital_impaired": impaired["impaired"],
         "capital_impaired_text": impaired["text"],
     }
@@ -2412,6 +2964,16 @@ PEER_METRICS = (
     ("ccc", "CCC", "일", False, 0),
 )
 
+# 금융업용 비교 지표 — 유동비율·CCC는 금융업에서 계산이 안 되고, 부채비율은 모두가 높아
+# 순위 의미가 약하다. 영업이익률·순이익률·ROE·ROA로 자본을 얼마나 효율적으로 쓰는지 비교한다.
+PEER_METRICS_FINANCIAL = (
+    ("op_margin", "영업이익률", "%", True, 1),
+    ("net_margin", "순이익률", "%", True, 1),
+    ("roe", "ROE", "%", True, 1),
+    ("roa", "ROA", "%", True, 1),
+    ("debt_ratio", "부채비율", "%", False, 1),
+)
+
 _INDUSTRY_SEED = None          # {corp_code: record} — 파일은 한 번만 읽는다
 _INDUSTRY_PROFILE_CACHE = {}   # corp_code → company.json 결과 | None
 _PEER_METRICS_CACHE = {}       # (corp_code, 연도) → 지표 dict | None
@@ -2606,12 +3168,14 @@ def select_industry_peers(target_code, records, exclude_codes=(), max_peers=PEER
 
 
 def metric_values(entry):
-    """한 연도의 dict(accounts·ratios·ccc) → 비교 지표 5개만 뽑는다(없으면 None)."""
+    """한 연도의 dict(accounts·ratios·ccc) → 비교 지표만 뽑는다(없으면 None)."""
     ratios = (entry or {}).get("ratios") or {}
     ccc = (entry or {}).get("ccc") or {}
     return {
         "op_margin": ratios.get("op_margin"),
+        "net_margin": ratios.get("net_margin"),
         "roe": ratios.get("roe"),
+        "roa": ratios.get("roa"),
         "debt_ratio": ratios.get("debt_ratio"),
         "current_ratio": ratios.get("current_ratio"),
         "ccc": ccc.get("ccc"),
@@ -2841,13 +3405,20 @@ def build_industry_comparison(api_key, analysis, max_peers=PEER_MAX, verbose=Fal
             return base
 
         target_values = metric_values(target["years"][year])
-        rows = compare_peers(target_values, collected)
+        financial = financial_industry_info(
+            induty_code=code, accounts=(target["years"][year].get("accounts") or {}),
+            sector=(record or {}).get("sector") or "",
+            corp_code=target.get("corp_code"), stock_code=target.get("stock_code"))
+        specs = PEER_METRICS_FINANCIAL if financial["is_financial"] else PEER_METRICS
+        rows = compare_peers(target_values, collected, specs)
         base.update({
             "status": "ok",
             "peers": collected,
             "skipped": skipped,
             "target_values": target_values,
             "rows": rows,
+            "metric_specs": [list(spec) for spec in specs],
+            "financial": financial,
             "comment": make_industry_comment(rows, name, len(collected), year),
             "fs_nm": collected[0]["metrics"].get("fs_nm") or "",
         })
@@ -4316,6 +4887,13 @@ def collect_company(api_key, corp, years, verbose=True):
         extras = fetch_extra_accounts(api_key, corp["corp_code"], year,
                                       fs_div=fs_div, known_accounts=accounts)
         accounts.update(extras)
+        # DART API가 현금흐름표 '조정'의 감가상각비를 주지 않는 회사(삼성전자 등)는
+        # 사업보고서 주석 원문에서 직접 읽어 온다. 실패하면 '미공시'로 남긴다.
+        if not api_depreciation_available(accounts):
+            note = fetch_depreciation_note(rcept_no)
+            if note and note_depreciation_plausible(note, accounts):
+                accounts["note_depreciation"] = note
+                company["years"][year]["depreciation_note"] = note
         # 최근 연도 기준으로 어떤 재무제표를 썼는지 기록
         company["fs_div"] = fs_div
         company["fs_nm"] = fs_nm
