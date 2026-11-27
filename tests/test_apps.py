@@ -426,7 +426,9 @@ def test_app_v2_renders_fpa_scenario_tab_without_exception(monkeypatch, patched_
     assert "투자 권유가 아니" in text                          # 면책 문구
     assert "공시되지 않습니다" in text                          # 외부 공시 데이터 한계 고지
     assert "CCC를 공시하지 않는 업종" in text                    # 금융업 등 폴백 안내
-    assert any("시뮬레이션 계산식 보기" in e.label for e in at.expander)
+    # 계산식·한계는 본문이 아니라 페이지 하단 'ⓘ 분석 기준 및 한계' 한 곳에 모았다
+    assert any("분석 기준 및 한계" in e.label for e in at.expander)
+    assert "FP&A 시나리오 계산식" in text
     assert any("손익 · 현금흐름 상세" in e.label for e in at.expander)
 
     comparison = [d.value for d in at.dataframe if "시나리오" in list(d.value.columns)]
@@ -882,3 +884,108 @@ def test_app_v2_tab4_says_missing_when_no_note(monkeypatch):
 
     assert not at.exception
     assert "감가상각비 출처: 미공시" in _texts(at)
+
+
+# ---------------------------------------------------------------------------
+# FP&A 계획·차이 분석 모드 (민감도 매트릭스 · 예산 vs 실적)
+# ---------------------------------------------------------------------------
+
+def _run_lab_app(monkeypatch, analysis=None):
+    """FP&A 모드로 앱을 띄운다 — DART 호출 없이 동작해야 한다."""
+    if analysis is not None:
+        monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+        monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    at = AppTest.from_file(APP_V2, default_timeout=60)
+    at.session_state["fs2_mode"] = "FP&A 계획·차이 분석"
+    at.run()
+    return at
+
+
+def test_app_v2_fpa_lab_mode_works_without_api_key(monkeypatch):
+    """FP&A 모드는 DART 키가 없어도 샘플 데이터로 바로 뜬다."""
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    at = _run_lab_app(monkeypatch)
+
+    assert not at.exception
+    text = _texts(at)
+    assert "민감도 매트릭스" in text
+    assert "예산 vs 실적 차이" in text
+    assert "영업이익 차이" in text and "매출 증감 효과" in text and "원가율 변동 효과" in text
+
+    markdown = _markdown(at)
+    assert "fs-labtable" in markdown
+    assert markdown.count('class="fs-lab-hi"') == 1      # 현재 가정 칸만 강조
+
+    # 편집 표(매출액·매출원가·판관비)와 결과 표가 그려진다
+    editors = [d.value for d in at.dataframe if "계획 (억원)" in list(d.value.columns)]
+    assert editors and list(editors[0]["항목"]) == ["매출액", "매출원가", "판관비"]
+    results = [d.value for d in at.dataframe if "증감률(%)" in list(d.value.columns)]
+    assert results and list(results[0]["항목"]) == ["매출액", "매출원가", "판관비", "영업이익"]
+
+
+def test_app_v2_fpa_lab_sample_variance_numbers(monkeypatch):
+    """샘플: 계획 1,000/700/200 → 실적 1,100/760/215 이면 영업이익 100 → 125억."""
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    at = _run_lab_app(monkeypatch)
+
+    results = [d.value for d in at.dataframe if "증감률(%)" in list(d.value.columns)][0]
+    op_row = results[results["항목"] == "영업이익"].iloc[0]
+    assert op_row["계획"] == pytest.approx(100.0)
+    assert op_row["실적"] == pytest.approx(125.0)
+    assert op_row["차이"] == pytest.approx(25.0)
+    assert op_row["판정"] == "유리"
+    assert "영업이익은 계획 대비" in _texts(at)
+
+
+def test_app_v2_fpa_lab_uses_last_dart_analysis_as_default(monkeypatch, patched_engine):
+    """DART 분석을 먼저 하면 그 기업 매출·이익률이 민감도 기본값이 된다."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    at = AppTest.from_file(APP_V2, default_timeout=60)
+    at.run()
+    at.text_input(key="fs2_main_query").set_value("삼성")
+    at.run()
+    at.get_by_key("fs2_run").click()
+    at.run()
+    assert not at.exception
+
+    at.session_state["fs2_mode"] = "FP&A 계획·차이 분석"
+    at.run()
+    assert not at.exception
+
+    inputs = {element.label: element.value for element in at.number_input}
+    assert inputs["매출액 (억원)"] == pytest.approx(10000.0)        # 1.0조원 = 10,000억원
+    assert inputs["영업이익률 (%)"] == pytest.approx(-6.0)          # 2024년 영업이익 -600억 ÷ 매출 1조
+    assert any("DART 기업: 삼성전자" in option for option in at.radio[0].options)
+
+
+def test_app_v2_long_tables_are_collapsed_by_default(monkeypatch, patched_engine):
+    """3개년 재무제표·동종업계 상세·공시 목록은 기본 접힘, 요약·차트·해설은 바로 보인다."""
+    monkeypatch.setenv("DART_API_KEY", FAKE_KEY)
+    analysis = build_analysis(impaired=False)
+    analysis["companies"][0]["disclosure"] = {
+        "status": "ok", "scanned": 20, "total": 20, "pages": 1, "truncated": False,
+        "oldest": "2025-01-01", "period": "2025-11-27 ~ 2026-11-27", "error": "",
+        "corrections": 0,
+        "matches": [{"severity": "caution", "rcept_dt": "2026-02-25", "report_nm": "유상증자결정",
+                     "correction": False, "subsidiary": True,
+                     "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=1"}],
+    }
+    monkeypatch.setattr(fs, "sync_corp_codes", lambda *a, **k: list(CORP_LIST))
+    monkeypatch.setattr(fs, "build_analysis", lambda *a, **k: analysis)
+    at = _run_analysis_app(AppTest.from_file(APP_V2, default_timeout=60))
+
+    assert not at.exception
+    labels = [element.label for element in at.expander]
+    assert any("3개년 재무제표 표" in label for label in labels)
+    assert any("동종업계 상세 표" in label for label in labels)
+    assert any("공시 목록" in label for label in labels)
+    # 접힘 상태 — AppTest 의 Expander 는 펼침 여부를 직접 노출하지 않으므로
+    # 소스에서 expanded=False 로 그린 것을 확인한다(요약·차트는 접힘 없이 그려진다).
+    with open(APP_V2, encoding="utf-8") as source:
+        code = source.read()
+    assert 'st.expander("3개년 재무제표 표 보기 (매출·영업이익·순이익·자산·부채·자본)", expanded=False)' in code
+    assert 'st.expander("동종업계 상세 표 보기", expanded=False)' in code
+    assert 'st.expander("공시 목록 %d건 보기" % len(rows), expanded=False)' in code
+    # 요약 문장·차트는 접힘 없이 그대로 보인다
+    text = _texts(at)
+    assert "동종업계 비교" in text and "영업이익률" in text

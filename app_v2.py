@@ -49,7 +49,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import analyzer as fs  # noqa: E402  (FinSight 분석 엔진)
+import analyzer as fs
+import fpa_variance as fv  # noqa: E402  (FinSight 분석 엔진)
 import excel_export as excel  # noqa: E402  (원클릭 엑셀 리포트)
 
 # 기업 목록 캐시는 저장소가 아니라 임시 폴더에 둔다. (Streamlit Cloud 파일 시스템은 휘발성)
@@ -883,6 +884,9 @@ APP_CSS = """
   }
   .fs-fintable a.fs-year:hover { color: #4F46E5; border-bottom-color: #4F46E5; }
   .fs-fintable .fs-na { color: #9CA3AF; }
+  /* FP&A 계획·차이 분석 — 민감도 표의 '현재 가정' 칸만 은은하게 */
+  table.fs-labtable th:first-child { text-align: left; }
+  table.fs-labtable td.fs-lab-hi { background: #EEF2FF; color: #312E81; font-weight: 800; }
 
   /* ── 동종업계 비교 표 ──────────────────────────────────── */
   .fs-fintable .fs-peer-tag {
@@ -1536,7 +1540,6 @@ def table_dupont(companies, years):
     df = build_table(companies, years, rows,
                      lambda company, year, key: (company["years"][year].get("dupont") or {}).get(key))
     show_table(df, digits=2)
-    st.caption("총자산회전율은 기말 자산 기준 · DuPont ROE는 단순 ROE와 0.01%p 이내로 일치해야 정상")
 
 
 def table_ccc(companies, years):
@@ -1549,7 +1552,6 @@ def table_ccc(companies, years):
     df = build_table(companies, years, rows,
                      lambda company, year, key: (company["years"][year].get("ccc") or {}).get(key))
     show_table(df, digits=0)
-    st.caption("기말잔액 · 365일 기준 · 금융업 등은 비어 있을 수 있습니다")
 
 
 def peer_metric_cells(values, comparisons=None, specs=None):
@@ -1956,7 +1958,9 @@ def render_tab1(analysis):
 
     # 제목은 여기서 한 번만 낸다. (표 함수에 같은 제목을 넘겨 두 줄로 겹치던 문제)
     section_title("핵심 재무제표")
-    table_financials(companies, years, CORE_ROWS, title=None)
+    # 긴 표는 기본 접힘 — 차트와 지표로 먼저 읽고, 숫자 확인이 필요할 때 펼친다.
+    with st.expander("3개년 재무제표 표 보기 (매출·영업이익·순이익·자산·부채·자본)", expanded=False):
+        table_financials(companies, years, CORE_ROWS, title=None)
     st.plotly_chart(chart_income(companies, years))
     st.plotly_chart(chart_ratios(companies, years))
 
@@ -1967,25 +1971,6 @@ def render_tab1(analysis):
         table_ratios(companies, years)
         for company in companies:
             quote_box("<b>%s</b> · %s" % (company["name"], company["dupont_comment"]))
-
-    with st.expander("지표 계산식 보기"):
-        st.markdown(
-            "| 지표 | 계산식 | 읽는 법 |\n"
-            "| --- | --- | --- |\n"
-            "| 영업이익률 | 영업이익 ÷ 매출액 × 100 | 매출 100원 중 본업에서 남긴 이익 |\n"
-            "| 순이익률 | 당기순이익 ÷ 매출액 × 100 | 이자·세금까지 반영한 최종 이익률 |\n"
-            "| ROE | 당기순이익 ÷ 기말 자본총계 × 100 | 주주 자본으로 번 수익률 |\n"
-            "| 부채비율 | 부채총계 ÷ 자본총계 × 100 | 업종 평균과 비교해 읽습니다 (절대 기준 없음) |\n"
-            "| 유동비율 | 유동자산 ÷ 유동부채 × 100 | 100% 미만이면 단기 지급여력 부족(경보선) |\n"
-            "| 이자보상배율 | 영업이익 ÷ 이자비용 | 1배 미만이면 영업이익으로 이자를 못 덮는 상태(경보선) |\n"
-            "| 매출액·영업이익 증가율 | (당기 − 전기) ÷ \\|전기\\| × 100 | 전기가 적자면 부호가 뒤집히지 않게 절댓값으로 나눔 |\n"
-        )
-        st.caption("ROE는 기말 자본 기준입니다. (기초+기말)/2 평균자본 기준과는 값이 조금 다를 수 있습니다. 자본잠식(자본총계 0 이하)인 해는 부채비율·ROE를 계산하지 않습니다.")
-        st.caption("판정 기준 — 업종마다 적정 마진·부채·현금주기가 달라 '양호 · 보통 · 부담' 같은 절대 컷은 두지 않습니다. "
-                   "판단의 주 근거는 같은 업종 피어의 실측 평균 대비 위치입니다: 평균보다 높음/낮음(사실)과 "
-                   "우위/열위(지표 방향을 반영한 판정 — 부채비율·CCC는 낮을수록 우위).")
-        st.caption("최소 경보선 — 업종과 무관하게 위험 신호로 보는 네 가지만 은은한 회색 라벨로 붙입니다: "
-                   + alert_rule_text() + ". (이자보상배율 1배 미만은 ① 재무 · 리스크 탭의 리스크 진단에서 '위험'으로 표시됩니다.)")
 
 
 # ---------------------------------------------------------------------------
@@ -2151,21 +2136,15 @@ def render_industry_block(analysis):
 
     section_title("동종업계 비교", industry_basis(peer_block))
     quote_box(html_lib.escape(peer_block["comment"]))
-    st.markdown(industry_peer_table(peer_block), unsafe_allow_html=True)
+    with st.expander("동종업계 상세 표 보기", expanded=False):
+        st.markdown(industry_peer_table(peer_block), unsafe_allow_html=True)
 
     financial = (peer_block.get("financial") or {}).get("is_financial")
     if financial:
-        notes = ["표 지표는 금융업 기준 — 영업이익률·순이익률·ROE·ROA·부채비율 (%)",
-                 "유동비율·CCC는 금융업에서 성립하지 않아 비교에서 빼고 ROE·ROA로 비교",
-                 "피어 중앙값·평균은 값이 있는 피어만으로 계산"]
-    else:
-        notes = ["영업이익률·ROE·부채비율·유동비율은 %, CCC는 일",
-                 "피어 평균·중앙값은 값이 있는 피어만으로 계산"]
+        st.caption("표 지표는 금융업 기준(영업이익률·순이익률·ROE·ROA·부채비율)입니다 — 유동비율·CCC는 "
+                   "금융업에서 성립하지 않아 비교에서 뺐습니다.")
     if peer_block.get("skipped"):
-        notes.append("지표를 받지 못해 뺀 피어: %s" % ", ".join(peer_block["skipped"]))
-    st.caption(" · ".join(notes) + ".")
-    st.caption("업종코드는 DART 기업개황의 신고값(KSIC 10차 기준)이라 실제 사업 구성과 다를 수 있습니다. "
-               "피어 선정은 동일 코드 → 같은 3자리 → 같은 2자리 순이고, 지주회사(64992)는 지주회사끼리만 비교합니다.")
+        st.caption("지표를 받지 못해 뺀 피어: %s" % ", ".join(peer_block["skipped"]))
 
 
 def render_tab2(analysis):
@@ -2343,7 +2322,6 @@ def render_fpa_simulator(company, latest):
 
     # 시나리오 카드 4장
     fpa_scenario_cards(result)
-    st.caption("카드의 큰 숫자는 3년 뒤(%d년) 추정 매출액입니다." % (latest + fs.FPNA_HORIZON_YEARS))
 
     figure = chart_fpa_scenarios(result)
     if figure is not None:
@@ -2376,8 +2354,7 @@ def render_fpa_simulator(company, latest):
             "영업이익률": st.column_config.NumberColumn("영업이익률", format="%.1f%%"),
         },
     )
-    st.caption("Y+3 영업이익률은 Y+3 영업이익 ÷ Y+3 매출입니다. 경보는 이자보상배율 1배 미만 또는 "
-               "기말 현금이 0 아래로 내려가는 첫 해입니다.")
+
 
     # 내 시나리오 연도별 상세 — 기본은 핵심 열만, 전체는 접어 둔다(모바일 가로 넘침 방지)
     custom = result["custom"]
@@ -2428,8 +2405,7 @@ def render_fpa_simulator(company, latest):
                    ["매출액", "매출원가", "판관비", "영업이익", "EBITDA", "감가상각비",
                     "운전자본 증감", "CAPEX", "이자비용", "FCF", "기말 현금"],
                    {"이자보상배율(배)": "%.2f"})
-        st.caption("운전자본 증감이 +면 현금이 묶인 것이라 FCF에서 빼고, CAPEX·이자비용도 FCF에서 뺍니다. "
-                   "기말 현금 = 기초 현금성자산 + 그해까지 누적 FCF. 법인세·배당·차입 상환은 반영하지 않았습니다.")
+
 
     # 핵심 인사이트 2~3줄
     if result.get("insights"):
@@ -2461,26 +2437,7 @@ def render_fpa_simulator(company, latest):
         st.caption("매출원가·판관비가 공시되지 않아 영업이익률을 출발 연도 수준으로 고정했습니다 — "
                    "고정비 비중 슬라이더는 이 기업에서는 쓰이지 않습니다.")
 
-    with st.expander("ⓘ 시뮬레이션 계산식 보기"):
-        st.markdown(
-            "| 항목 | 계산식 |\n| --- | --- |\n"
-            "| 매출액 | 출발 연도 매출액 × (1 + 매출 성장률)^n |\n"
-            "| 매출원가 | 매출액(n) × (매출원가(0) ÷ 매출액(0)) — 매출을 따라가는 변동비 |\n"
-            "| 판관비 | 판관비(0)×고정비 비중 + 매출액(n) × 판관비(0)×(1−고정비 비중) ÷ 매출액(0) |\n"
-            "| 영업이익 | 매출액 − 매출원가 − 판관비 + 기타손익(0) |\n"
-            "| 이자보상배율 | 영업이익(n) ÷ 이자비용(0) |\n"
-            "| EBITDA | 영업이익(n) + 감가상각비(0) |\n"
-            "| 운전자본 | 매출액 ÷ 365 × CCC , CCC(n) = CCC(0) + 변동(일) |\n"
-            "| FCF | EBITDA(n) − 운전자본 증감 − CAPEX(n) − 이자비용(0) |\n"
-            "| 기말 현금 | 기초 현금성자산(0) + 누적 FCF |\n"
-        )
-        st.caption("운전자본은 공시된 CCC(DSO+DIO−DPO)에서 ‘매출 1일분 × 회전일수’로 근사합니다. "
-                   "매출채권·재고자산·매입채무 잔액을 해마다 따로 추정하지 않는 단순법입니다. "
-                   "기타손익(0)은 공시 영업이익과 (매출−매출원가−판관비)의 차이를 그대로 유지한 값이라, "
-                   "성장률 0인 기준 시나리오는 출발 연도 영업이익을 재현합니다.")
-    for line in result.get("limits") or []:
-        st.caption(line)
-    st.caption(result.get("note") or fs.FPNA_DISCLAIMER)
+
 
 
 def render_tab4(analysis):
@@ -2550,11 +2507,12 @@ def render_disclosure(company):
                 "구분": ", ".join(flags) or "-",
                 "원문": match["url"],
             })
-        st.dataframe(
-            pd.DataFrame(rows), hide_index=True,
-            column_config={"원문": st.column_config.LinkColumn("원문", display_text="DART에서 열기")},
-        )
-        st.caption("정정공시는 같은 사건이 여러 건으로 늘어나고, ‘종속회사’ 공시는 종속회사 사건일 수 있습니다.")
+        with st.expander("공시 목록 %d건 보기" % len(rows), expanded=False):
+            st.dataframe(
+                pd.DataFrame(rows), hide_index=True,
+                column_config={"원문": st.column_config.LinkColumn("원문", display_text="DART에서 열기")},
+            )
+            st.caption("정정공시는 같은 사건이 여러 건으로 늘어나고, ‘종속회사’ 공시는 종속회사 사건일 수 있습니다.")
 
 
 def risk_compare_table(companies):
@@ -2591,10 +2549,9 @@ def render_tab3(analysis):
             st.warning("%s — 부채비율·ROE·DuPont은 음수 자본으로 왜곡되어 계산하지 않습니다."
                        % (risk.get("capital_impaired_text") or "자본잠식 상태입니다"))
         if risk.get("z_score") is not None:
-            st.caption("Altman Z''-Score(장부가 기준) %.2f — 2.6 이상 안전 / 1.1~2.6 회색 / 1.1 미만 부실 위험 · 연속 영업적자 %d년"
-                       % (risk["z_score"], risk["op_loss_streak"]))
+            st.caption("Altman Z'' %.2f (장부가 기준) · 연속 영업적자 %d년" % (risk["z_score"], risk["op_loss_streak"]))
         else:
-            st.caption("Altman Z''-Score 계산에 필요한 계정이 일부 없습니다 · 연속 영업적자 %d년" % risk["op_loss_streak"])
+            st.caption("Altman Z'' 계산에 필요한 계정 일부 없음 · 연속 영업적자 %d년" % risk["op_loss_streak"])
         if index < len(companies) - 1:
             st.write("")
 
@@ -2617,6 +2574,347 @@ def render_tab3(analysis):
             st.markdown("**%s** — %s" % (company["name"], company.get("fs_nm") or "-"))
         table_reports(company, years)
         st.write("")
+
+
+# ---------------------------------------------------------------------------
+# 10-0. FP&A 계획·차이 분석 모드 (민감도 매트릭스 · 예산 vs 실적)
+# ---------------------------------------------------------------------------
+#  DART 분석(과거 결산)과 섞이지 않도록 상단 모드로 분리한다.
+#  · 민감도: 매출 성장률 × 영업이익률 5×5 → 영업이익·FCF
+#  · 차이 분석: 계획 vs 실적(직접 입력·CSV·샘플) → 금액·증감률 + 원인 분해(매출 효과 / 원가율 효과)
+
+MODE_DART = "DART 기업 분석"
+MODE_FPA = "FP&A 계획·차이 분석"
+LAB_SAMPLE_LABEL = "직접 입력(샘플)"
+LAB_CSV_UNIT_NOTE = "CSV 형식: 항목,계획,실적 (매출액·매출원가·판관비, 단위 억원)"
+
+
+def mode_switch():
+    """상단 모드 전환 — 두 화면이 섞이지 않게 나눈다."""
+    options = [MODE_DART, MODE_FPA]
+    if hasattr(st, "segmented_control"):
+        picked = st.segmented_control("보기 모드", options, default=MODE_DART,
+                                      key="fs2_mode", label_visibility="collapsed")
+        return picked or MODE_DART
+    return st.radio("보기 모드", options, horizontal=True, key="fs2_mode",
+                    label_visibility="collapsed")
+
+
+def _eok_to_won(value):
+    return float(value) * 1e8
+
+
+def _won_to_eok(value):
+    return None if value is None else float(value) / 1e8
+
+
+def lab_base_inputs(baseline, label):
+    """민감도 기준 값 — DART 공시값을 기본값으로 두고 그 자리에서 고칠 수 있게 한다."""
+    revenue = _won_to_eok(baseline.get("revenue")) if baseline else None
+    margin = baseline.get("op_margin") if baseline else None
+    depreciation = _won_to_eok(baseline.get("depreciation")) if baseline else None
+    capex_pct = baseline.get("capex_ratio") if baseline else None
+    ccc = baseline.get("ccc") if baseline else None
+    interest = _won_to_eok(baseline.get("interest_expense")) if baseline else None
+
+    columns = st.columns(2)
+    with columns[0]:
+        revenue_value = st.number_input(
+            "매출액 (억원)", min_value=0.0, step=100.0,
+            value=float(round(revenue, 1)) if revenue else 1000.0,
+            key="fs2_lab_revenue_%s" % label)
+    with columns[1]:
+        margin_value = st.number_input(
+            "영업이익률 (%)", min_value=-100.0, max_value=100.0, step=0.5,
+            value=float(round(margin, 1)) if margin is not None else 10.0,
+            key="fs2_lab_margin_%s" % label)
+
+    with st.expander("가정 자세히 (감가상각비 · CAPEX · CCC · 이자비용)", expanded=False):
+        detail = st.columns(2)
+        with detail[0]:
+            depreciation_value = st.number_input(
+                "감가상각비 (억원)", min_value=0.0, step=10.0,
+                value=float(round(depreciation, 1)) if depreciation else 0.0,
+                key="fs2_lab_dep_%s" % label,
+                help="EBITDA = 영업이익 + 감가상각비. 미공시면 0으로 두고 FCF를 보수적으로 봅니다.")
+            ccc_value = st.number_input(
+                "CCC (일)", min_value=-365.0, max_value=365.0, step=5.0,
+                value=float(round(ccc, 0)) if ccc is not None else 30.0,
+                key="fs2_lab_ccc_%s" % label,
+                help="운전자본 = 매출액 ÷ 365 × CCC. 0이면 운전자본 변동을 반영하지 않습니다.")
+        with detail[1]:
+            capex_value = st.number_input(
+                "매출 대비 CAPEX (%)", min_value=0.0, max_value=60.0, step=0.5,
+                value=float(round(capex_pct, 1)) if capex_pct is not None else 5.0,
+                key="fs2_lab_capex_%s" % label)
+            interest_value = st.number_input(
+                "이자비용 (억원)", min_value=0.0, step=10.0,
+                value=float(round(interest, 1)) if interest else 0.0,
+                key="fs2_lab_interest_%s" % label)
+
+    revenue_won = _eok_to_won(revenue_value)
+    return {
+        "revenue": revenue_won,
+        "op_margin": float(margin_value),
+        "depreciation": _eok_to_won(depreciation_value),
+        "capex_pct": float(capex_value),
+        "ccc": float(ccc_value),
+        "working_capital": revenue_won / 365.0 * float(ccc_value),
+        "interest_expense": _eok_to_won(interest_value),
+    }
+
+
+def sensitivity_table_html(matrix, metric="op_income"):
+    """민감도 5×5 표 — 현재 가정 칸만 은은하게 강조한다."""
+    if not matrix or not matrix.get("available"):
+        return ""
+    growth, margins = matrix["growth"], matrix["margins"]
+    head = ['<tr><th class="fs-rowhead">성장률 \\ 이익률</th>']
+    head += ["<th>%.1f%%</th>" % margin for margin in margins]
+    head.append("</tr>")
+    base_cell = matrix.get("base_cell")
+    body = []
+    for growth_value, row in zip(growth, matrix["cells"]):
+        body.append('<tr><th scope="row">%+.0f%%</th>' % growth_value)
+        for cell in row:
+            if not cell:
+                body.append('<td><span class="fs-na">-</span></td>')
+                continue
+            value = cell.get(metric)
+            if value is None:
+                body.append('<td><span class="fs-na">-</span></td>')
+                continue
+            highlight = ' class="fs-lab-hi"' if cell is base_cell else ""
+            body.append("<td%s>%s</td>" % (highlight, human_won(value)))
+        body.append("</tr>")
+    return ('<table class="fs-fintable fs-labtable"><thead>' + "".join(head)
+            + "</thead><tbody>" + "".join(body) + "</tbody></table>")
+
+
+def render_sensitivity_block(baseline, label):
+    section_title("민감도 매트릭스",
+                  "매출 성장률 × 영업이익률 5×5 — 1년 뒤 영업이익과 잉여현금흐름(FCF)이 어떻게 달라지는지 · 단위 조원/억원")
+    base = lab_base_inputs(baseline, label)
+    if not base["revenue"]:
+        st.info("매출액이 0이라 민감도 표를 계산할 수 없습니다. 매출액을 입력해 주세요.")
+        return
+    metric = st.radio("표에 표시할 값", ["영업이익", "FCF"], horizontal=True,
+                      key="fs2_lab_metric_%s" % label, label_visibility="collapsed")
+    matrix = fv.sensitivity_matrix(base)
+    st.markdown(sensitivity_table_html(matrix, "fcf" if metric == "FCF" else "op_income"),
+                unsafe_allow_html=True)
+    st.caption(fv.sensitivity_comment(matrix))
+    if metric == "FCF" and not base.get("depreciation"):
+        st.caption("감가상각비가 0이라 EBITDA = 영업이익입니다 — FCF가 그만큼 작게(보수적으로) 나옵니다.")
+
+
+def variance_frame(values):
+    """편집용 표 — 항목 · 계획(억원) · 실적(억원). 영업이익은 계산 행이라 넣지 않는다."""
+    return pd.DataFrame({
+        "항목": ["매출액", "매출원가", "판관비"],
+        "계획 (억원)": [round(_won_to_eok(values["plan"][key]), 1)
+                    for key in ("revenue", "cost_of_sales", "sgna")],
+        "실적 (억원)": [round(_won_to_eok(values["actual"][key]), 1)
+                    for key in ("revenue", "cost_of_sales", "sgna")],
+    })
+
+
+def values_from_frame(frame):
+    keys = ("revenue", "cost_of_sales", "sgna")
+    plan, actual = {}, {}
+    for position, key in enumerate(keys):
+        plan[key] = _eok_to_won(frame.iloc[position]["계획 (억원)"])
+        actual[key] = _eok_to_won(frame.iloc[position]["실적 (억원)"])
+    return {"plan": plan, "actual": actual}
+
+
+def variance_result_frame(rows):
+    """결과 표 — 계획·실적·차이·증감률(억원, %)."""
+    return pd.DataFrame([{
+        "항목": row["label"],
+        "계획": _won_to_eok(row["plan"]),
+        "실적": _won_to_eok(row["actual"]),
+        "차이": _won_to_eok(row["diff"]),
+        "증감률(%)": None if row["diff_pct"] is None else round(row["diff_pct"], 1),
+        "판정": None if row["favorable"] is None else ("유리" if row["favorable"] else "불리"),
+    } for row in rows])
+
+
+def render_variance_block():
+    section_title("예산 vs 실적 차이",
+                  "계획과 실적을 고치거나 CSV로 올리면 즉시 다시 계산됩니다 · 금액 단위 억원")
+    uploaded = st.file_uploader("CSV 업로드 — " + LAB_CSV_UNIT_NOTE, type=["csv"], key="fs2_lab_csv")
+
+    values = None
+    if uploaded is not None:
+        try:
+            text = uploaded.getvalue().decode("utf-8-sig")
+        except Exception:
+            text = ""
+        values = fv.parse_variance_csv(text)
+        if values is None:
+            st.warning("CSV를 읽지 못했습니다. '항목,계획,실적' 헤더와 매출액·매출원가·판관비 세 줄이 필요합니다.")
+    if values is None:
+        default = fv.sample_budget()
+        frame = st.data_editor(
+            variance_frame(default), hide_index=True, key="fs2_lab_editor",
+            use_container_width=True, num_rows="fixed",
+            column_config={
+                "항목": st.column_config.TextColumn("항목", disabled=True),
+                "계획 (억원)": st.column_config.NumberColumn("계획 (억원)", format="%.1f"),
+                "실적 (억원)": st.column_config.NumberColumn("실적 (억원)", format="%.1f"),
+            },
+        )
+        values = values_from_frame(frame)
+    else:
+        st.caption("업로드한 CSV 값으로 계산했습니다 — " + LAB_CSV_UNIT_NOTE)
+
+    rows = fv.variance_rows(values["plan"], values["actual"])
+    effects = fv.operating_variance_effects(values["plan"], values["actual"])
+
+    st.dataframe(
+        variance_result_frame(rows), hide_index=True, use_container_width=True,
+        column_config={
+            "계획": st.column_config.NumberColumn("계획", format="%.1f"),
+            "실적": st.column_config.NumberColumn("실적", format="%.1f"),
+            "차이": st.column_config.NumberColumn("차이", format="%.1f"),
+            "증감률(%)": st.column_config.NumberColumn("증감률", format="%.1f%%"),
+        },
+    )
+    plan, actual = values["plan"], values["actual"]
+    revenue_plan = plan["revenue"] or 1.0
+    revenue_actual = actual["revenue"] or 1.0
+    cogs_rate_plan = plan["cost_of_sales"] / revenue_plan
+    cogs_rate_actual = actual["cost_of_sales"] / revenue_actual
+    sgna_rate_plan = plan["sgna"] / revenue_plan
+    sgna_rate_actual = actual["sgna"] / revenue_actual
+    cards = [
+        ("영업이익 차이", human_won(effects["total"]), "실적 − 계획", "#111827"),
+        ("매출 증감 효과", human_won(effects["revenue_effect"]),
+         "계획 원가율 %s 유지 가정" % pct(None if effects["plan_cost_ratio"] is None
+                                     else effects["plan_cost_ratio"] * 100), "#4F46E5"),
+        ("원가율 변동 효과", human_won(effects["cost_rate_effect"]),
+         "매출원가율 %+.1f%%p · 판관비율 %+.1f%%p" % (
+             (cogs_rate_actual - cogs_rate_plan) * 100,
+             (sgna_rate_actual - sgna_rate_plan) * 100),
+         "#6B7280"),
+    ]
+    columns = st.columns(3)
+    for column, (label, value, sub, accent) in zip(columns, cards):
+        column.markdown(card(label, value, sub, accent), unsafe_allow_html=True)
+    quote_box(html_lib.escape(fv.variance_comment(effects)))
+
+
+def render_fpa_lab(analysis=None):
+    """FP&A 계획·차이 분석 화면 — DART 분석 결과가 있으면 그 기업 값을 기본값으로 쓴다."""
+    st.markdown('<div id="%s" style="scroll-margin-top:14px"></div>' % ANCHOR_ID,
+                unsafe_allow_html=True)
+    section_title("FP&A 계획·차이 분석",
+                  "가정을 바꿔 이익·현금을 미리 보고(민감도), 계획 대비 실적 차이를 원인별로 나눠 봅니다.")
+
+    companies = (analysis or {}).get("companies") or []
+    years = (analysis or {}).get("years") or []
+    target = companies[0] if companies else None
+    latest = years[-1] if years else None
+
+    options = [LAB_SAMPLE_LABEL]
+    if target and latest:
+        options.append("DART 기업: %s %d년" % (target["name"], latest))
+    # 방금 DART 분석을 했다면 그 기업 값을 기본으로 연다(없으면 샘플).
+    source = st.radio("민감도 기준 데이터", options, horizontal=True, key="fs2_lab_source",
+                      index=1 if len(options) > 1 else 0)
+
+    baseline, label = None, "sample"
+    if source != LAB_SAMPLE_LABEL and target and latest:
+        baseline = fs.fpa_baseline(target, latest)
+        label = "dart"
+        if not baseline or not baseline.get("revenue"):
+            st.caption("%s는 매출액 단일 계정이 없어(금융지주 IFRS17 등) 공시값을 기본값으로 쓸 수 없습니다. "
+                       "직접 입력으로 계산합니다." % target["name"])
+            baseline = None
+    if not baseline:
+        st.caption("샘플 기준값으로 시작합니다 — 아래 입력을 바꾸면 표가 바로 다시 계산됩니다.")
+
+    render_sensitivity_block(baseline, label)
+    st.divider()
+    render_variance_block()
+
+
+# ---------------------------------------------------------------------------
+# 10-1. 분석 기준·한계 통합 안내 (본문에서는 빼고 맨 아래 한 곳에 모은다)
+# ---------------------------------------------------------------------------
+
+LIMITS_FORMULA_TABLE = (
+    "| 지표 | 계산식 | 읽는 법 |\n"
+    "| --- | --- | --- |\n"
+    "| 영업이익률 | 영업이익 ÷ 매출액 × 100 | 매출 100원 중 본업에서 남긴 이익 |\n"
+    "| 순이익률 | 당기순이익 ÷ 매출액 × 100 | 이자·세금까지 반영한 최종 이익률 |\n"
+    "| ROE | 당기순이익 ÷ 기말 자본총계 × 100 | 주주 자본으로 번 수익률 |\n"
+    "| ROA | 당기순이익 ÷ 기말 자산총계 × 100 | 자산을 얼마나 효율적으로 썼는지(금융업 핵심) |\n"
+    "| 부채비율 | 부채총계 ÷ 자본총계 × 100 | 업종 평균과 비교해 읽습니다 (절대 기준 없음) |\n"
+    "| 유동비율 | 유동자산 ÷ 유동부채 × 100 | 100% 미만이면 단기 지급여력 부족(경보선) |\n"
+    "| 이자보상배율 | 영업이익 ÷ 이자비용 | 1배 미만이면 영업이익으로 이자를 못 덮는 상태(경보선) |\n"
+    "| 매출액·영업이익 증가율 | (당기 − 전기) ÷ \\|전기\\| × 100 | 전기가 적자면 부호가 뒤집히지 않게 절댓값으로 나눔 |\n"
+)
+
+LIMITS_FPA_TABLE = (
+    "| 항목 | 계산식 |\n| --- | --- |\n"
+    "| 매출액 | 출발 연도 매출액 × (1 + 매출 성장률)^n |\n"
+    "| 매출원가 | 매출액(n) × (매출원가(0) ÷ 매출액(0)) — 매출을 따라가는 변동비 |\n"
+    "| 판관비 | 판관비(0)×고정비 비중 + 매출액(n) × 판관비(0)×(1−고정비 비중) ÷ 매출액(0) |\n"
+    "| 영업이익 | 매출액 − 매출원가 − 판관비 + 기타손익(0) |\n"
+    "| 이자보상배율 | 영업이익(n) ÷ 이자비용(0) |\n"
+    "| EBITDA | 영업이익(n) + 감가상각비(0) |\n"
+    "| 운전자본 | 매출액 ÷ 365 × CCC , CCC(n) = CCC(0) + 변동(일) |\n"
+    "| FCF | EBITDA(n) − 운전자본 증감 − CAPEX(n) − 이자비용(0) |\n"
+    "| 기말 현금 | 기초 현금성자산(0) + 누적 FCF |\n"
+)
+
+
+def render_limits_drawer():
+    """계산식·판정 기준·출처·한계를 페이지 맨 아래 한 곳에 모은다(본문은 숫자와 원문 링크 중심)."""
+    with st.expander("ⓘ 분석 기준 및 한계", expanded=False):
+        st.markdown(DISCLAIMER_TMPL, unsafe_allow_html=True)
+
+        st.markdown("**지표 계산식**")
+        st.markdown(LIMITS_FORMULA_TABLE)
+        st.caption("ROE는 기말 자본 기준입니다. (기초+기말)/2 평균자본 기준과는 값이 조금 다를 수 있습니다. "
+                   "자본잠식(자본총계 0 이하)인 해는 부채비율·ROE를 계산하지 않습니다.")
+        st.caption("판정 기준 — 업종마다 적정 마진·부채·현금주기가 달라 '양호 · 보통 · 부담' 같은 절대 컷은 두지 않습니다. "
+                   "판단의 주 근거는 같은 업종 피어의 실측 평균 대비 위치입니다: 평균보다 높음/낮음(사실)과 "
+                   "우위/열위(지표 방향을 반영한 판정 — 부채비율·CCC는 낮을수록 우위).")
+        st.caption("최소 경보선 — 업종과 무관하게 위험 신호로 보는 네 가지만 은은한 회색 라벨로 붙입니다: "
+                   + alert_rule_text() + ".")
+
+        st.markdown("**DuPont · CCC**")
+        st.caption("총자산회전율은 기말 자산 기준 · DuPont ROE는 단순 ROE와 0.01%p 이내로 일치해야 정상입니다. "
+                   "CCC는 기말잔액·365일 기준이며 매출원가를 공시하지 않는 회사는 계산하지 않습니다.")
+
+        st.markdown("**동종업계 비교**")
+        st.caption("업종코드는 DART 기업개황의 신고값(KSIC 10차 기준)이라 실제 사업 구성과 다를 수 있습니다. "
+                   "피어 선정은 동일 코드 → 같은 3자리 → 같은 2자리 순이고, 지주회사(64992)는 지주회사끼리만 비교합니다. "
+                   "영업이익률·ROE·부채비율·유동비율은 %, CCC는 일이며, 금융업은 유동비율·CCC 대신 "
+                   "순이익률·ROA로 비교합니다. 피어 평균·중앙값은 값이 있는 피어만으로 계산합니다.")
+
+        st.markdown("**FP&A 시나리오 계산식**")
+        st.markdown(LIMITS_FPA_TABLE)
+        st.caption("운전자본은 공시된 CCC(DSO+DIO−DPO)에서 ‘매출 1일분 × 회전일수’로 근사합니다. "
+                   "기타손익(0)은 공시 영업이익과 (매출−매출원가−판관비)의 차이를 그대로 유지한 값이라, "
+                   "성장률 0인 기준 시나리오는 출발 연도 영업이익을 재현합니다.")
+        for line in fs.FPNA_LIMITS:
+            st.caption(line)
+        st.caption(fs.FPNA_DISCLAIMER)
+
+        st.markdown("**FP&A 계획·차이 분석**")
+        st.caption("민감도 매트릭스는 1년치 단순 계산입니다(3개년 누적은 ② FP&A · 시나리오 탭). "
+                   "차이 분해는 매출 효과를 '계획 원가율'로 평가하는 표준적 단순 분해로, "
+                   "제품 구성(mix)·환율·일회성 항목은 나누지 않습니다.")
+
+        st.markdown("**데이터 · 출처**")
+        st.caption("재무수치는 금융감독원 OpenDART 사업보고서(연결 우선, 없으면 별도) · 기말잔액 기준입니다. "
+                   "감가상각비는 DART API 현금흐름표 '조정' 항목을 먼저 쓰고, 없으면 사업보고서 주석 원문"
+                   "(비용의 성격별 분류·현금흐름표 주석 등)에서 읽어 단위를 원으로 환산합니다(출처는 화면에 1줄 표시). "
+                   "공시 위험 키워드는 공시명 단순 필터라 오탐·누락이 있을 수 있습니다.")
 
 
 # ---------------------------------------------------------------------------
@@ -2675,8 +2973,6 @@ def render_results(analysis):
     render_excel_download(analysis)
     render_summary(analysis)
     render_disclosure_alert(analysis["companies"])
-    with st.expander("ⓘ 분석 기준 및 한계 보기"):
-        st.markdown(DISCLAIMER_TMPL, unsafe_allow_html=True)
     st.write("")
 
     # 탭은 두 개로 — ①에서 '지금 어떤 상태인가'(재무 → 리스크 → 공시 → 원문),
@@ -2693,6 +2989,9 @@ def render_results(analysis):
         render_tab2(analysis)
         st.divider()
         render_tab4(analysis)
+
+    # 계산식·한계·출처 설명은 본문에서 빼고 페이지 맨 아래 한 곳에 모은다.
+    render_limits_drawer()
 
     st.divider()
     footer_left, footer_middle, footer_right = st.columns([1, 1.1, 1])
@@ -2741,6 +3040,14 @@ def main():
     inject_css()
     render_hero()
 
+    # ── 상단 모드 전환 ─────────────────────────────────────────────
+    #   DART 기업 분석(과거 결산)과 FP&A 계획·차이 분석(가정·예산)은 다루는 데이터가 달라
+    #   한 화면에 섞지 않는다. FP&A 모드는 DART 호출 없이도 동작한다(샘플·직접 입력).
+    mode = mode_switch()
+    if mode == MODE_FPA:
+        render_fpa_lab(st.session_state.get("fs2_analysis"))
+        return
+
     api_key, key_source = resolve_api_key()
 
     # 인증키가 secrets·환경변수·세션 어디에도 없으면 중앙 카드 expander에서 받는다.
@@ -2780,6 +3087,8 @@ def main():
     if analysis is None:
         st.session_state["fs2_scroll"] = False
         return
+    # FP&A 계획·차이 분석 모드가 이 기업의 공시값을 기본값으로 쓸 수 있게 남겨 둔다.
+    st.session_state["fs2_analysis"] = analysis
 
     pending_scroll = bool(st.session_state.pop("fs2_scroll", False))
     render_results(analysis)
