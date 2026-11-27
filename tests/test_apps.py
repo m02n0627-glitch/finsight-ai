@@ -412,10 +412,8 @@ def test_app_v2_renders_fpa_scenario_tab_without_exception(monkeypatch, patched_
 
     assert not at.exception
     assert [tab.label for tab in at.tabs] == [
-        "① 재무·추이",
-        "② FP&A·업계",
-        "③ 리스크·공시",
-        "④ 시나리오",
+        "① 재무 · 리스크",
+        "② FP&A · 시나리오",
     ]
     assert [slider.label for slider in at.slider] == [
         "연간 매출 성장률 (%)", "판관비 중 고정비 비중 (%)",

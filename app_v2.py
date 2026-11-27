@@ -15,7 +15,7 @@ app.py(사이드바 버전)는 기록·비교용으로 그대로 두고, 화면�
          · 맨 아래 가득 찬 🔎 분석 실행 버튼
     ③ 분석 실행 시 결과 영역 상단(#analysis-result)으로 부드러운 스크롤
        (버튼을 눌렀을 때만 — 단순 입력 변경으로는 화면이 튀지 않게 session_state 플래그로 제어)
-    ④ 결과 — 종합 점수·공시 위험·한계 고지 + 4개 탭
+    ④ 결과 — 종합 점수·공시 위험·한계 고지 + 2개 탭(재무·리스크 / FP&A·시나리오)
        (핵심 재무·추이 / FP&A DuPont·CCC + 동종업계 비교 / 리스크·DART 원문 / 3표 연결 FP&A 시나리오)
 
 사이드바는 쓰지 않는다. set_page_config(initial_sidebar_state="collapsed") +
@@ -918,10 +918,9 @@ APP_CSS = """
       }
       .fs-fintable th, .fs-fintable td { padding: 6px 8px; font-size: 12px; }
 
-      /* 탭 4개가 390px 폭에서도 한 줄에 들어오게 — 라벨을 짧게 줄인 데 맞춰 간격·글자를 조인다 */
-      .stTabs [data-baseweb="tab"], .stTabs [role="tab"] { padding: 0 7px; font-size: 11.5px; height: 40px; }
-      .stTabs [data-baseweb="tab"], .stTabs [role="tab"], .stTabs [role="tab"] p { letter-spacing: -0.02em; }
-      .stTabs [data-baseweb="tab-list"], .stTabs [role="tablist"] { gap: 0; overflow-x: auto; }
+      /* 탭 2개 — 390px 폭에서도 한 줄에 넉넉히 들어온다. 간격만 살짝 조인다. */
+      .stTabs [data-baseweb="tab"], .stTabs [role="tab"] { padding: 0 12px; font-size: 13px; height: 42px; }
+      .stTabs [data-baseweb="tab-list"], .stTabs [role="tablist"] { gap: 6px; overflow-x: auto; }
       .stTabs [data-baseweb="tab"] p, .stTabs [role="tab"] p { margin: 0; }
   }
 </style>
@@ -959,10 +958,10 @@ KPI_TMPL = (
 
 # ── 탭 ② 용어·목차 설명 — 처음 보는 사람이 10초에 읽는 분량으로 ─────────────────
 GLOSSARY_TAB2 = """
-**화면 목차** — ① 핵심 재무·추이(얼마나 벌었나) · **② 지금 이 화면**(번 이유와 현금이 도는 속도) · ③ 리스크·공시 원문 · ④ FP&A 시나리오(앞으로 어떻게 될까)
+**화면 목차** — **① 재무·리스크**(얼마나 벌었나 + 건전성 신호와 공시 원문) · **② FP&A·시나리오**(번 이유와 현금이 도는 속도 + 앞으로 어떻게 될까)
 
 **FP&A** — Financial Planning & Analysis, *재무 계획과 분석*입니다. 끝난 회계연도의 숫자를 출발점으로
-“매출이 10% 늘면 3년 뒤 이익과 현금은 어떻게 되는가”를 계산하는 일입니다. 이 앱에서는 탭 ④ 시나리오가 FP&A입니다.
+“매출이 10% 늘면 3년 뒤 이익과 현금은 어떻게 되는가”를 계산하는 일입니다. 이 앱에서는 ② FP&A·시나리오 탭의 DuPont·CCC와 3표 연결 시뮬레이터가 FP&A입니다.
 
 **DuPont ROE 3단계 분해** — ROE(자기자본이익률)는 *주주 돈 100원으로 1년에 얼마를 벌었나*입니다.
 같은 ROE라도 버는 방법이 다르므로 세 조각으로 나눠 봅니다.
@@ -993,7 +992,7 @@ ROE 15%가 마진으로 번 것인지 빚으로 키운 것인지가 여기서 �
 **유동비율 100% 미만** → `100% 미만 · 주의` · **이자보상배율 1배 미만** → `1배 미만 · 주의`.
 """
 
-# ── 탭 ④ 시나리오 용어 (짧게) ───────────────────────────────────────────────
+# ── ② FP&A·시나리오 탭의 시나리오 용어 (짧게) ───────────────────────────────────────────────
 GLOSSARY_TAB4 = """
 - **보수적 (Bear)** — 매출이 줄고 현금 회수도 늦어지는 경우(성장 −10%, CCC +20일).
 - **기준 (Base)** — 지금 추세가 그대로 이어지는 경우(성장 0%).
@@ -1360,7 +1359,7 @@ def render_disclosure_alert(companies):
         )
         st.markdown(
             '<div class="fs-alert%s"><b>공시 위험 알림</b> — %s. '
-            '<b>③ 리스크 상세</b> 탭에서 원문을 확인하세요.</div>'
+            '<b>① 재무 · 리스크</b> 탭에서 원문을 확인하세요.</div>'
             % (" danger" if danger else "", ", ".join(hits)),
             unsafe_allow_html=True,
         )
@@ -1986,7 +1985,7 @@ def render_tab1(analysis):
                    "판단의 주 근거는 같은 업종 피어의 실측 평균 대비 위치입니다: 평균보다 높음/낮음(사실)과 "
                    "우위/열위(지표 방향을 반영한 판정 — 부채비율·CCC는 낮을수록 우위).")
         st.caption("최소 경보선 — 업종과 무관하게 위험 신호로 보는 네 가지만 은은한 회색 라벨로 붙입니다: "
-                   + alert_rule_text() + ". (이자보상배율 1배 미만은 ③ 리스크 상세에서 '위험'으로 표시됩니다.)")
+                   + alert_rule_text() + ". (이자보상배율 1배 미만은 ① 재무 · 리스크 탭의 리스크 진단에서 '위험'으로 표시됩니다.)")
 
 
 # ---------------------------------------------------------------------------
@@ -2181,7 +2180,7 @@ def render_tab2(analysis):
 
 
 # ---------------------------------------------------------------------------
-# 9-2. 탭 4 — FP&A 3개년 시나리오 시뮬레이터
+# 9-2. ② FP&A·시나리오 탭 — 3표 연결 FP&A 3개년 시뮬레이터
 # ---------------------------------------------------------------------------
 
 FPA_ACCENT = {"bear": "#9CA3AF", "base": "#6B7280", "bull": "#4F46E5", "custom": "#111827"}
@@ -2512,7 +2511,7 @@ def render_tab4(analysis):
 
 
 # ---------------------------------------------------------------------------
-# 10. 탭 3 — 리스크 상세 & DART 원문
+# 10. ① 재무·리스크 탭 — 5대 리스크 상세 · 공시 위험 · DART 원문
 # ---------------------------------------------------------------------------
 
 def render_disclosure(company):
@@ -2680,19 +2679,19 @@ def render_results(analysis):
         st.markdown(DISCLAIMER_TMPL, unsafe_allow_html=True)
     st.write("")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "① 재무·추이",
-        "② FP&A·업계",
-        "③ 리스크·공시",
-        "④ 시나리오",
+    # 탭은 두 개로 — ①에서 '지금 어떤 상태인가'(재무 → 리스크 → 공시 → 원문),
+    # ②에서 '왜 그런가 + 앞으로 어떻게 되는가'(DuPont·CCC·동종업계 → 시나리오)를 읽는다.
+    tab1, tab2 = st.tabs([
+        "① 재무 · 리스크",
+        "② FP&A · 시나리오",
     ])
     with tab1:
         render_tab1(analysis)
+        st.divider()
+        render_tab3(analysis)
     with tab2:
         render_tab2(analysis)
-    with tab3:
-        render_tab3(analysis)
-    with tab4:
+        st.divider()
         render_tab4(analysis)
 
     st.divider()
