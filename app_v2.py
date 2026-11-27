@@ -2703,7 +2703,7 @@ def render_sensitivity_block(baseline, label):
     matrix = fv.sensitivity_matrix(base)
     st.markdown(sensitivity_table_html(matrix, "fcf" if metric == "FCF" else "op_income"),
                 unsafe_allow_html=True)
-    st.caption(fv.sensitivity_comment(matrix))
+    st.caption(fv.sensitivity_comment(matrix, "fcf" if metric == "FCF" else "op_income"))
     if metric == "FCF" and not base.get("depreciation"):
         st.caption("감가상각비가 0이라 EBITDA = 영업이익입니다 — FCF가 그만큼 작게(보수적으로) 나옵니다.")
 

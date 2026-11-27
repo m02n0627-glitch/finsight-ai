@@ -103,8 +103,14 @@ def test_sensitivity_matrix_without_revenue_is_not_available():
 
 
 def test_sensitivity_comment_mentions_best_and_current():
-    text = fv.sensitivity_comment(fv.sensitivity_matrix(base()))
-    assert "가장 크고" in text and "현재 가정" in text
+    matrix = fv.sensitivity_matrix(base())
+    text = fv.sensitivity_comment(matrix)
+    assert "가장 큽니다" in text and "현재 가정" in text
+    # 표에 보이는 지표와 해석이 일치해야 한다 (영업이익 ↔ FCF)
+    assert "영업이익이 가장 큽니다(154억원)" in text      # +10% · 14% → 1,100억 × 14%
+    fcf_text = fv.sensitivity_comment(matrix, "fcf")
+    assert "FCF가 가장 큽니다(139억원)" in fcf_text       # 154억 + 감가 50 − CAPEX 55 − 이자 10
+    assert "가장 작습니다(49억원)" in fcf_text             # 54억 + 50 − 45 − 10
 
 
 # ---------------------------------------------------------------------------

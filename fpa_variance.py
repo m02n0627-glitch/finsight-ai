@@ -152,18 +152,40 @@ def sensitivity_matrix(base, growth_steps=None, margins=None):
     }
 
 
-def sensitivity_comment(matrix):
-    """민감도 표 한 줄 해석 — 가장 좋은/나쁜 칸과 현재 위치."""
+def sensitivity_comment(matrix, metric="op_income"):
+    """민감도 표 한 줄 해석 — 표에 보이는 지표(영업이익/FCF) 기준으로 가장 좋은·나쁜 칸과 현재 위치."""
     if not matrix or not matrix.get("available"):
         return "매출액이 없어 민감도 표를 계산할 수 없습니다."
-    best, worst, base = matrix["best"], matrix["worst"], matrix["base_cell"]
-    unit = "FCF" if best.get("fcf") is not None else "영업이익"
-    return ("매출 성장 %+.0f%% · 영업이익률 %.1f%%일 때 %s가 %s로 가장 크고, "
-            "성장 %+.0f%% · 이익률 %.1f%%일 때 %s가 %s로 가장 작습니다. 현재 가정(성장 %+.0f%%, "
-            "이익률 %.1f%%)에서는 %s %s입니다." % (
-                best["growth_pct"], best["margin_pct"], unit, _short(best),
-                worst["growth_pct"], worst["margin_pct"], unit, _short(worst),
-                base["growth_pct"], base["margin_pct"], unit, _short(base)))
+    use_fcf = metric == "fcf"
+
+    def shown(cell):
+        value = cell.get("fcf") if use_fcf else cell.get("op_income")
+        return "%s억원" % format(round(_number(value) / 1e8), ",")
+
+    unit = _with_i_ga("FCF" if use_fcf else "영업이익")
+    cells = [cell for row in matrix["cells"] for cell in row if cell]
+    pick = (lambda cell: cell["fcf"]) if use_fcf else (lambda cell: cell["op_income"])
+    best = max(cells, key=pick)
+    worst = min(cells, key=pick)
+    base = matrix["base_cell"]
+    return ("매출 성장 %+.0f%% · 영업이익률 %.1f%%일 때 %s 가장 큽니다(%s). "
+            "반대로 성장 %+.0f%% · 이익률 %.1f%%일 때 가장 작습니다(%s). "
+            "현재 가정(성장 %+.0f%%, 이익률 %.1f%%)에서는 %s입니다." % (
+                best["growth_pct"], best["margin_pct"], unit, shown(best),
+                worst["growth_pct"], worst["margin_pct"], shown(worst),
+                base["growth_pct"], base["margin_pct"], shown(base)))
+
+
+def _with_i_ga(word):
+    """'영업이익이 / FCF가' 처럼 받침에 맞춰 조사를 붙인다."""
+    if not word:
+        return word
+    last = word[-1]
+    code = ord(last)
+    has_batchim = 0xAC00 <= code <= 0xD7A3 and (code - 0xAC00) % 28 != 0
+    if "가" <= last <= "힣":
+        return word + ("이" if has_batchim else "가")
+    return word + "가"
 
 
 def _short(cell):
