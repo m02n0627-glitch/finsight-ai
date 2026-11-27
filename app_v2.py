@@ -2701,9 +2701,14 @@ def render_sensitivity_block(baseline, label):
     metric = st.radio("표에 표시할 값", ["영업이익", "FCF"], horizontal=True,
                       key="fs2_lab_metric_%s" % label, label_visibility="collapsed")
     matrix = fv.sensitivity_matrix(base)
-    st.markdown(sensitivity_table_html(matrix, "fcf" if metric == "FCF" else "op_income"),
-                unsafe_allow_html=True)
-    st.caption(fv.sensitivity_comment(matrix, "fcf" if metric == "FCF" else "op_income"))
+    metric_key = "fcf" if metric == "FCF" else "op_income"
+    st.markdown(sensitivity_table_html(matrix, metric_key), unsafe_allow_html=True)
+    try:
+        comment = fv.sensitivity_comment(matrix, metric_key)
+    except TypeError:
+        # 재배포 직후 옛 fpa_variance 모듈이 물려 있으면(1인자 버전) 그쪽으로 물러난다.
+        comment = fv.sensitivity_comment(matrix)
+    st.caption(comment)
     if metric == "FCF" and not base.get("depreciation"):
         st.caption("감가상각비가 0이라 EBITDA = 영업이익입니다 — FCF가 그만큼 작게(보수적으로) 나옵니다.")
 
