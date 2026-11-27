@@ -887,6 +887,7 @@ APP_CSS = """
   /* FP&A 계획·차이 분석 — 민감도 표의 '현재 가정' 칸만 은은하게 */
   table.fs-labtable th:first-child { text-align: left; }
   table.fs-labtable td.fs-lab-hi { background: #EEF2FF; color: #312E81; font-weight: 800; }
+  div[data-testid="stMarkdownContainer"]:has(> table.fs-labtable) { overflow-x: auto; }
 
   /* ── 동종업계 비교 표 ──────────────────────────────────── */
   .fs-fintable .fs-peer-tag {
@@ -921,6 +922,9 @@ APP_CSS = """
           overflow-x: auto; -webkit-overflow-scrolling: touch;
       }
       .fs-fintable th, .fs-fintable td { padding: 6px 8px; font-size: 12px; }
+      /* 민감도 5×5 — 390px 폭에서 5열이 한눈에 들어오게 더 조인다 */
+      table.fs-labtable th, table.fs-labtable td { padding: 5px 4px; font-size: 11px; }
+      table.fs-labtable th:first-child { font-size: 10px; }
 
       /* 탭 2개 — 390px 폭에서도 한 줄에 넉넉히 들어온다. 간격만 살짝 조인다. */
       .stTabs [data-baseweb="tab"], .stTabs [role="tab"] { padding: 0 12px; font-size: 13px; height: 42px; }
@@ -2664,6 +2668,16 @@ def lab_base_inputs(baseline, label):
     }
 
 
+def lab_cell_text(value):
+    """민감도 표 한 칸 — 390px 폭에서도 5열이 들어오게 '90.5조 / 126억'처럼 짧게."""
+    if value is None:
+        return "-"
+    value = float(value)
+    if abs(value) >= 1e12:
+        return "%.1f조" % (value / 1e12)
+    return "%s억" % format(round(value / 1e8), ",")
+
+
 def sensitivity_table_html(matrix, metric="op_income"):
     """민감도 5×5 표 — 현재 가정 칸만 은은하게 강조한다."""
     if not matrix or not matrix.get("available"):
@@ -2685,7 +2699,7 @@ def sensitivity_table_html(matrix, metric="op_income"):
                 body.append('<td><span class="fs-na">-</span></td>')
                 continue
             highlight = ' class="fs-lab-hi"' if cell is base_cell else ""
-            body.append("<td%s>%s</td>" % (highlight, human_won(value)))
+            body.append("<td%s>%s</td>" % (highlight, lab_cell_text(value)))
         body.append("</tr>")
     return ('<table class="fs-fintable fs-labtable"><thead>' + "".join(head)
             + "</thead><tbody>" + "".join(body) + "</tbody></table>")
@@ -2693,7 +2707,7 @@ def sensitivity_table_html(matrix, metric="op_income"):
 
 def render_sensitivity_block(baseline, label):
     section_title("민감도 매트릭스",
-                  "매출 성장률 × 영업이익률 5×5 — 1년 뒤 영업이익과 잉여현금흐름(FCF)이 어떻게 달라지는지 · 단위 조원/억원")
+                  "매출 성장률 × 영업이익률 5×5 — 1년 뒤 영업이익·FCF가 어떻게 달라지는지 · 단위 조원/억원")
     base = lab_base_inputs(baseline, label)
     if not base["revenue"]:
         st.info("매출액이 0이라 민감도 표를 계산할 수 없습니다. 매출액을 입력해 주세요.")

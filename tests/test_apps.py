@@ -989,3 +989,16 @@ def test_app_v2_long_tables_are_collapsed_by_default(monkeypatch, patched_engine
     # 요약 문장·차트는 접힘 없이 그대로 보인다
     text = _texts(at)
     assert "동종업계 비교" in text and "영업이익률" in text
+
+
+def test_lab_cell_text_compact_units(monkeypatch):
+    """lab_cell_text 단위 표기 — 억/조, None은 '-'."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fs_app_v2", APP_V2)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)          # main() 이 실행되지만 키가 없어 안내 화면에서 멈춘다
+
+    assert module.lab_cell_text(154e8) == "154억"
+    assert module.lab_cell_text(9.05e13) == "90.5조"
+    assert module.lab_cell_text(-154e8) == "-154억"
+    assert module.lab_cell_text(None) == "-"
