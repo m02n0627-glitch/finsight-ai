@@ -3050,6 +3050,8 @@ def run_with_feedback(settings):
                 st.caption("인증키·조회 연도·회사명을 확인해 주세요. OpenDART는 하루 20,000건까지 호출할 수 있습니다.")
         except (urllib.error.URLError, OSError) as error:
             st.error("네트워크 오류로 OpenDART에 접속하지 못했습니다 — %s" % error)
+            st.caption("OpenDART가 느리거나 막히는 시간대입니다. 위 **FP&A 계획·차이 분석** 모드는 "
+                       "DART 연결 없이도 민감도·예산 차이 계산을 쓸 수 있습니다.")
         except Exception as error:                     # 예상 못 한 오류도 화면에 안내
             st.error("분석 중 예상하지 못한 오류가 발생했습니다.\n\n%s: %s" % (type(error).__name__, error))
     return None
